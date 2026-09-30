@@ -17,9 +17,9 @@ export function createClient() {
       getAll() {
         return cookieStore.getAll();
       },
-      setAll(cookiesToSet) {
+      setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
         try {
-          cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
+          cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options as never));
         } catch {
           // Called from a Server Component with no writable cookie store —
           // safe to ignore as long as middleware.ts is refreshing sessions.
