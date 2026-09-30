@@ -13,13 +13,14 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [checkEmail, setCheckEmail] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
-    const { error: signUpError } = await supabase.auth.signUp({
+    const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -34,8 +35,34 @@ export default function SignupPage() {
     }
 
     // The handle_new_user() DB trigger creates the organization, profile and
-    // seeds the Pricing Book the moment this signup lands — nothing else to do.
-    router.push("/dashboard");
+    // seeds the Pricing Book the moment this signup lands.
+    //
+    // Whether we get a live session back depends on the Supabase project's
+    // "Confirm email" setting: if it's off, signUp() logs the user straight
+    // in and we can go to the dashboard now. If it's on (Supabase's default),
+    // there's no session yet — the user must click the link in their
+    // confirmation email first, and redirecting to /dashboard here would
+    // just bounce them straight back out to /login with an empty form.
+    if (data.session) {
+      router.push("/dashboard");
+      router.refresh();
+    } else {
+      setCheckEmail(true);
+    }
+  }
+
+  if (checkEmail) {
+    return (
+      <main className="min-h-screen flex items-center justify-center px-6">
+        <div className="max-w-sm w-full bg-paper-raised border border-line-strong rounded-lg p-8 text-center">
+          <h1 className="font-display text-2xl font-semibold mb-3">Check your email</h1>
+          <p className="text-sm text-ink-soft">
+            We&apos;ve sent a confirmation link to <strong>{email}</strong>. Click it to activate your
+            account, then come back and log in.
+          </p>
+        </div>
+      </main>
+    );
   }
 
   return (
