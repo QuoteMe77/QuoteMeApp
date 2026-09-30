@@ -103,7 +103,12 @@ export async function POST(request: NextRequest) {
       messages: [
         {
           role: "user",
-          content: [contentBlock, { type: "text", text: PLAN_PROMPT }],
+          // The installed SDK version's TypeScript types don't yet include
+          // "document" blocks in this content array's union (PDF support was
+          // added to the API before the type defs caught up), even though
+          // the API itself accepts it — cast at this single call site rather
+          // than losing type-safety on the rest of the file.
+          content: [contentBlock, { type: "text", text: PLAN_PROMPT }] as never,
         },
       ],
     });
