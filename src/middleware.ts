@@ -32,9 +32,19 @@ export async function middleware(request: NextRequest) {
 
   const {
     data: { user },
+    error: getUserError,
   } = await supabase.auth.getUser();
 
   const isDashboardRoute = request.nextUrl.pathname.startsWith("/dashboard");
+
+  // Temporary diagnostic logging — visible in Vercel's Runtime Logs.
+  console.log("[middleware]", {
+    path: request.nextUrl.pathname,
+    hasUser: !!user,
+    getUserError: getUserError?.message ?? null,
+    cookieNames: request.cookies.getAll().map((c) => c.name),
+  });
+
   if (isDashboardRoute && !user) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("next", request.nextUrl.pathname);
