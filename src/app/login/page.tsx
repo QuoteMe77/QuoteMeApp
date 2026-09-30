@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
@@ -13,7 +13,6 @@ export default function LoginPage() {
 }
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = createClient();
   const [email, setEmail] = useState("");
@@ -34,8 +33,11 @@ function LoginForm() {
       return;
     }
 
-    router.push(searchParams.get("next") || "/dashboard");
-    router.refresh();
+    // A client-side router.push() here can race the auth cookie actually
+    // reaching the server — the very next request sometimes goes out before
+    // the cookie write has landed, and gets bounced right back to /login.
+    // A full navigation guarantees the browser sends the fresh cookie.
+    window.location.assign(searchParams.get("next") || "/dashboard");
   }
 
   return (

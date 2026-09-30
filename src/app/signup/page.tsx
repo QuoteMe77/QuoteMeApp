@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function SignupPage() {
-  const router = useRouter();
   const supabase = createClient();
   const [businessName, setBusinessName] = useState("");
   const [fullName, setFullName] = useState("");
@@ -44,8 +42,11 @@ export default function SignupPage() {
     // confirmation email first, and redirecting to /dashboard here would
     // just bounce them straight back out to /login with an empty form.
     if (data.session) {
-      router.push("/dashboard");
-      router.refresh();
+      // A full navigation (not router.push) so the browser is guaranteed to
+      // send the just-written auth cookie on the very next request — a
+      // client-side push can race ahead of the cookie write and bounce
+      // straight back to /login.
+      window.location.assign("/dashboard");
     } else {
       setCheckEmail(true);
     }
