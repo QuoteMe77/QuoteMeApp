@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import PasswordInput from "@/components/PasswordInput";
 
 export default function SignupPage() {
   const supabase = createClient();
@@ -102,14 +103,7 @@ export default function SignupPage() {
           />
         </Field>
         <Field label="Password">
-          <input
-            required
-            type="password"
-            minLength={8}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="input"
-          />
+          <PasswordInput value={password} onChange={setPassword} minLength={8} autoComplete="new-password" />
         </Field>
 
         {error && <p className="text-brick text-sm mb-4">{error}</p>}
