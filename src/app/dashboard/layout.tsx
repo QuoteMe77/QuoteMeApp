@@ -6,22 +6,32 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const supabase = createClient();
   const {
     data: { user },
+    error: userError,
   } = await supabase.auth.getUser();
+  console.log("[dashboard-layout] getUser", { hasUser: !!user, userError: userError?.message ?? null });
   if (!user) redirect("/login");
 
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("org_id, full_name")
     .eq("id", user.id)
     .single();
 
+  console.log("[dashboard-layout] profile lookup", {
+    userId: user.id,
+    hasProfile: !!profile,
+    profileError: profileError?.message ?? null,
+  });
+
   if (!profile) redirect("/login");
 
-  const { data: org } = await supabase
+  const { data: org, error: orgError } = await supabase
     .from("organizations")
     .select("id, name, subscription_status, trial_ends_at")
     .eq("id", profile.org_id)
     .single();
+
+  console.log("[dashboard-layout] org lookup", { orgId: profile.org_id, hasOrg: !!org, orgError: orgError?.message ?? null });
 
   const trialExpired =
     org?.subscription_status === "trialing" &&
