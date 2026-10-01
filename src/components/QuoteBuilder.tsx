@@ -6,6 +6,49 @@ import { saveQuote, deleteQuoteAndRedirect, type QuoteItemInput, type QuoteMetaI
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { downloadQuotePdf } from "@/lib/exportPdf";
 import { downloadQuoteDocx } from "@/lib/exportDocx";
+import { PDFDocument } from "pdf-lib";
+
+// Above this size, a PDF is routed through the page-picker instead of being
+// uploaded whole — a full multi-trade construction document set can run to
+// 60-100MB, well past both Supabase Storage's 50MB free-plan ceiling and
+// Claude's own 32MB-per-PDF limit, and almost always contains far more than
+// the joinery-relevant sheets anyway.
+const PDF_PICKER_THRESHOLD_BYTES = 8 * 1024 * 1024;
+const UPLOAD_HARD_LIMIT_BYTES = 45 * 1024 * 1024; // stay under Supabase's 50MB cap with headroom
+
+function parsePageSpec(spec: string, pageCount: number): number[] {
+  const trimmed = spec.trim();
+  if (!trimmed) return Array.from({ length: pageCount }, (_, i) => i);
+  const indices = new Set<number>();
+  for (const part of trimmed.split(",")) {
+    const token = part.trim();
+    if (!token) continue;
+    const rangeMatch = token.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (rangeMatch) {
+      const start = parseInt(rangeMatch[1], 10);
+      const end = parseInt(rangeMatch[2], 10);
+      for (let n = Math.min(start, end); n <= Math.max(start, end); n++) {
+        if (n >= 1 && n <= pageCount) indices.add(n - 1);
+      }
+    } else if (/^\d+$/.test(token)) {
+      const n = parseInt(token, 10);
+      if (n >= 1 && n <= pageCount) indices.add(n - 1);
+    }
+  }
+  return Array.from(indices).sort((a, b) => a - b);
+}
+
+async function extractPdfPages(file: File, pageSpec: string): Promise<File> {
+  const srcBytes = await file.arrayBuffer();
+  const srcDoc = await PDFDocument.load(srcBytes);
+  const indices = parsePageSpec(pageSpec, srcDoc.getPageCount());
+  const newDoc = await PDFDocument.create();
+  const copiedPages = await newDoc.copyPages(srcDoc, indices);
+  copiedPages.forEach((p) => newDoc.addPage(p));
+  const newBytes = await newDoc.save();
+  const baseName = file.name.replace(/\.pdf$/i, "");
+  return new File([newBytes as BlobPart], `${baseName}-selected.pdf`, { type: "application/pdf" });
+}
 
 type Calc = "LM" | "QTY" | "MISC";
 
@@ -185,11 +228,17 @@ export default function QuoteBuilder({
     return `${userId}/${Date.now()}-${safeName}`;
   }
 
-  async function handlePlanUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
+  type PdfPicker = {
+    target: "plan" | "schedule";
+    file: File;
+    pageCount: number;
+    pagesInput: string;
+    busy: boolean;
+    error: string | null;
+  };
+  const [pdfPicker, setPdfPicker] = useState<PdfPicker | null>(null);
 
+  async function runPlanRead(planFile: File, scheduleFile: File | null) {
     setPlanUploading(true);
     setPlanError(null);
     setPlanResult(null);
@@ -208,17 +257,16 @@ export default function QuoteBuilder({
       // Uploaded straight to storage from the browser, not through our own
       // API route: Vercel's serverless functions reject any request body
       // over ~4.5MB, and a real plan or schedule PDF routinely exceeds that.
-      const planPath = storagePathFor(user.id, file);
+      const planPath = storagePathFor(user.id, planFile);
       const { error: planUploadError } = await supabase.storage
         .from("plan-uploads")
-        .upload(planPath, file, { contentType: file.type });
+        .upload(planPath, planFile, { contentType: planFile.type });
       if (planUploadError) {
         setPlanError("Could not upload the plan. Please try again.");
         return;
       }
 
       let schedulePath: string | null = null;
-      const scheduleFile = scheduleFileRef.current;
       if (scheduleFile) {
         schedulePath = storagePathFor(user.id, scheduleFile);
         const { error: scheduleUploadError } = await supabase.storage
@@ -256,10 +304,84 @@ export default function QuoteBuilder({
     }
   }
 
-  function handleScheduleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handlePlanUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    if (file.type === "application/pdf" && file.size > PDF_PICKER_THRESHOLD_BYTES) {
+      setPlanError(null);
+      try {
+        const srcDoc = await PDFDocument.load(await file.arrayBuffer());
+        setPdfPicker({ target: "plan", file, pageCount: srcDoc.getPageCount(), pagesInput: "", busy: false, error: null });
+      } catch {
+        setPlanError("Could not open this PDF to select pages. Please try again.");
+      }
+      return;
+    }
+
+    runPlanRead(file, scheduleFileRef.current);
+  }
+
+  async function handleScheduleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0] || null;
+    e.target.value = "";
+    if (!file) {
+      scheduleFileRef.current = null;
+      setScheduleFileName(null);
+      return;
+    }
+
+    if (file.type === "application/pdf" && file.size > PDF_PICKER_THRESHOLD_BYTES) {
+      setPlanError(null);
+      try {
+        const srcDoc = await PDFDocument.load(await file.arrayBuffer());
+        setPdfPicker({ target: "schedule", file, pageCount: srcDoc.getPageCount(), pagesInput: "", busy: false, error: null });
+      } catch {
+        setPlanError("Could not open this PDF to select pages. Please try again.");
+      }
+      return;
+    }
+
     scheduleFileRef.current = file;
-    setScheduleFileName(file?.name || null);
+    setScheduleFileName(file.name);
+  }
+
+  async function confirmPdfPicker() {
+    if (!pdfPicker) return;
+    setPdfPicker((prev) => (prev ? { ...prev, busy: true, error: null } : prev));
+    try {
+      const extracted = await extractPdfPages(pdfPicker.file, pdfPicker.pagesInput);
+      if (extracted.size > UPLOAD_HARD_LIMIT_BYTES) {
+        setPdfPicker((prev) =>
+          prev
+            ? {
+                ...prev,
+                busy: false,
+                error: `Still too large (${(extracted.size / (1024 * 1024)).toFixed(1)}MB) even after selecting pages. Try selecting fewer pages.`,
+              }
+            : prev
+        );
+        return;
+      }
+
+      if (pdfPicker.target === "plan") {
+        setPdfPicker(null);
+        runPlanRead(extracted, scheduleFileRef.current);
+      } else {
+        scheduleFileRef.current = extracted;
+        setScheduleFileName(extracted.name);
+        setPdfPicker(null);
+      }
+    } catch {
+      setPdfPicker((prev) =>
+        prev ? { ...prev, busy: false, error: "Could not extract those pages. Check the page numbers and try again." } : prev
+      );
+    }
+  }
+
+  function cancelPdfPicker() {
+    setPdfPicker(null);
   }
 
   function addSelectedPlanItems() {
@@ -637,6 +759,43 @@ export default function QuoteBuilder({
           </label>
         </div>
         {planError && <p className="text-brick text-sm mt-2">{planError}</p>}
+
+        {pdfPicker && (
+          <div className="mt-4 border border-line-strong rounded-md p-4 bg-paper">
+            <p className="text-sm font-medium mb-1">
+              This {pdfPicker.target === "plan" ? "plan" : "schedule"} PDF is large ({(pdfPicker.file.size / (1024 * 1024)).toFixed(1)}MB,{" "}
+              {pdfPicker.pageCount} pages).
+            </p>
+            <p className="text-xs text-ink-soft mb-3">
+              Pick just the pages you need (e.g. "4, 7, 12-14"). Leave blank to use every page.
+            </p>
+            <div className="flex flex-wrap gap-2 items-center">
+              <input
+                type="text"
+                className="input min-w-[200px] flex-1"
+                placeholder={`Page numbers (1–${pdfPicker.pageCount})`}
+                value={pdfPicker.pagesInput}
+                onChange={(e) => setPdfPicker((prev) => (prev ? { ...prev, pagesInput: e.target.value, error: null } : prev))}
+                disabled={pdfPicker.busy}
+              />
+              <button
+                onClick={confirmPdfPicker}
+                disabled={pdfPicker.busy}
+                className="shrink-0 bg-ink text-paper rounded-md px-3 py-2 text-sm hover:opacity-90 disabled:opacity-50"
+              >
+                {pdfPicker.busy ? "Extracting…" : "Use these pages"}
+              </button>
+              <button
+                onClick={cancelPdfPicker}
+                disabled={pdfPicker.busy}
+                className="shrink-0 border border-line-strong rounded-md px-3 py-2 text-sm hover:bg-paper disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+            {pdfPicker.error && <p className="text-brick text-sm mt-2">{pdfPicker.error}</p>}
+          </div>
+        )}
 
         {planResult && (
           <div className="mt-4">
