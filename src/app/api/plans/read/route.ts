@@ -126,7 +126,8 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("Could not load uploaded file(s) from storage:", err);
     await admin.storage.from("plan-uploads").remove(pathsToClean);
-    return NextResponse.json({ error: "Could not read the uploaded file. Please try again." }, { status: 502 });
+    const detail = err instanceof Error ? err.message : "Unknown error.";
+    return NextResponse.json({ error: `Could not read the uploaded file. ${detail}` }, { status: 502 });
   }
 
   // Clean up the temporary upload(s) now that we've read them into memory —
@@ -155,7 +156,20 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     console.error("Anthropic plan-read call failed:", err);
-    return NextResponse.json({ error: "Could not read the plan right now. Please try again." }, { status: 502 });
+    // Surface the actual reason in the response rather than a generic
+    // message — digging through Vercel's logs for this is slow, and the
+    // Anthropic SDK's error shape varies by failure type, so this reads
+    // whatever fields are actually present instead of assuming one.
+    const anyErr = err as { status?: number; message?: string; error?: { message?: string } };
+    const detail =
+      anyErr?.error?.message || anyErr?.message || (err instanceof Error ? err.message : "Unknown error.");
+    const status = anyErr?.status;
+    return NextResponse.json(
+      {
+        error: `Could not read the plan right now.${status ? ` (Anthropic error ${status})` : ""} ${detail}`.trim(),
+      },
+      { status: 502 }
+    );
   }
 
   const textBlock = message.content.find((block) => block.type === "text");
