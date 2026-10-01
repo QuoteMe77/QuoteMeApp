@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -74,56 +74,67 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Subscription required to read plans." }, { status: 402 });
   }
 
-  const formData = await request.formData();
-  const file = formData.get("file");
-  const scheduleFile = formData.get("schedule");
-  if (!file || !(file instanceof File)) {
+  // Files arrive as storage paths, not raw bytes: the browser uploads
+  // directly to Supabase Storage first (see handlePlanUpload in
+  // QuoteBuilder.tsx), because Vercel's serverless functions reject any
+  // request body over ~4.5MB — a real floor plan or finishes schedule PDF
+  // routinely exceeds that on its own, let alone both together. This route
+  // just fetches the already-uploaded file(s) server-side, where there's no
+  // such limit, and deletes them once read.
+  const body = await request.json().catch(() => null);
+  const planPath: unknown = body?.planPath;
+  const schedulePath: unknown = body?.schedulePath;
+  if (typeof planPath !== "string" || !planPath) {
     return NextResponse.json({ error: "No file uploaded." }, { status: 400 });
   }
 
-  const allowedTypes = ["image/png", "image/jpeg", "image/webp", "application/pdf"];
-  if (!allowedTypes.includes(file.type)) {
-    return NextResponse.json(
-      { error: "Unsupported file type. Upload a PNG, JPEG, WEBP or PDF." },
-      { status: 400 }
-    );
-  }
-  const maxBytes = 15 * 1024 * 1024;
-  if (file.size > maxBytes) {
-    return NextResponse.json({ error: "File is too large (15MB max)." }, { status: 400 });
-  }
-  if (scheduleFile instanceof File) {
-    if (!allowedTypes.includes(scheduleFile.type)) {
-      return NextResponse.json(
-        { error: "Unsupported schedule file type. Upload a PNG, JPEG, WEBP or PDF." },
-        { status: 400 }
-      );
-    }
-    if (scheduleFile.size > maxBytes) {
-      return NextResponse.json({ error: "Schedule file is too large (15MB max)." }, { status: 400 });
-    }
-  }
+  const admin = createAdminClient();
+  const pathsToClean: string[] = [planPath];
+  if (typeof schedulePath === "string" && schedulePath) pathsToClean.push(schedulePath);
 
-  async function toContentBlock(f: File) {
-    const bytes = Buffer.from(await f.arrayBuffer());
+  async function toContentBlock(path: string) {
+    const { data, error } = await admin.storage.from("plan-uploads").download(path);
+    if (error || !data) throw new Error(`Could not retrieve uploaded file: ${error?.message ?? "not found"}`);
+    const mediaType = data.type || "application/octet-stream";
+    const bytes = Buffer.from(await data.arrayBuffer());
     const base64 = bytes.toString("base64");
-    return f.type === "application/pdf"
+    return mediaType === "application/pdf"
       ? ({ type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } } as const)
       : ({
           type: "image",
-          source: { type: "base64", media_type: f.type as "image/png" | "image/jpeg" | "image/webp", data: base64 },
+          source: { type: "base64", media_type: mediaType as "image/png" | "image/jpeg" | "image/webp", data: base64 },
         } as const);
   }
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  const planBlock = await toContentBlock(file);
-  const content: unknown[] = [{ type: "text", text: "Drawing to quote from:" }, planBlock];
-  if (scheduleFile instanceof File) {
-    const scheduleBlock = await toContentBlock(scheduleFile);
-    content.push({ type: "text", text: "Finishes & hardware schedule (for resolving codes and nominated hardware only — do not quote line items from this document itself):" }, scheduleBlock);
+  let content: unknown[];
+  try {
+    const planBlock = await toContentBlock(planPath);
+    content = [{ type: "text", text: "Drawing to quote from:" }, planBlock];
+    if (typeof schedulePath === "string" && schedulePath) {
+      const scheduleBlock = await toContentBlock(schedulePath);
+      content.push(
+        {
+          type: "text",
+          text: "Finishes & hardware schedule (for resolving codes and nominated hardware only — do not quote line items from this document itself):",
+        },
+        scheduleBlock
+      );
+    }
+    content.push({ type: "text", text: PLAN_PROMPT });
+  } catch (err) {
+    console.error("Could not load uploaded file(s) from storage:", err);
+    await admin.storage.from("plan-uploads").remove(pathsToClean);
+    return NextResponse.json({ error: "Could not read the uploaded file. Please try again." }, { status: 502 });
   }
-  content.push({ type: "text", text: PLAN_PROMPT });
+
+  // Clean up the temporary upload(s) now that we've read them into memory —
+  // no need to keep them in storage either way, success or failure from here.
+  admin.storage.from("plan-uploads").remove(pathsToClean).then(
+    () => {},
+    () => {}
+  );
 
   let message;
   try {

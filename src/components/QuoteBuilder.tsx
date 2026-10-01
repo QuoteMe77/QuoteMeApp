@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { saveQuote, deleteQuoteAndRedirect, type QuoteItemInput, type QuoteMetaInput } from "@/app/dashboard/quotes/actions";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { downloadQuotePdf } from "@/lib/exportPdf";
 import { downloadQuoteDocx } from "@/lib/exportDocx";
 
@@ -179,6 +180,11 @@ export default function QuoteBuilder({
     return candidates.find((c) => !/push to open/i.test(c.name)) || candidates[0] || null;
   }
 
+  function storagePathFor(userId: string, file: File) {
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    return `${userId}/${Date.now()}-${safeName}`;
+  }
+
   async function handlePlanUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -190,10 +196,45 @@ export default function QuoteBuilder({
     setPlanItemMaterial({});
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      if (scheduleFileRef.current) formData.append("schedule", scheduleFileRef.current);
-      const res = await fetch("/api/plans/read", { method: "POST", body: formData });
+      const supabase = createBrowserClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        setPlanError("Your session has expired — please log in again.");
+        return;
+      }
+
+      // Uploaded straight to storage from the browser, not through our own
+      // API route: Vercel's serverless functions reject any request body
+      // over ~4.5MB, and a real plan or schedule PDF routinely exceeds that.
+      const planPath = storagePathFor(user.id, file);
+      const { error: planUploadError } = await supabase.storage
+        .from("plan-uploads")
+        .upload(planPath, file, { contentType: file.type });
+      if (planUploadError) {
+        setPlanError("Could not upload the plan. Please try again.");
+        return;
+      }
+
+      let schedulePath: string | null = null;
+      const scheduleFile = scheduleFileRef.current;
+      if (scheduleFile) {
+        schedulePath = storagePathFor(user.id, scheduleFile);
+        const { error: scheduleUploadError } = await supabase.storage
+          .from("plan-uploads")
+          .upload(schedulePath, scheduleFile, { contentType: scheduleFile.type });
+        if (scheduleUploadError) {
+          setPlanError("Could not upload the finishes schedule. Please try again.");
+          return;
+        }
+      }
+
+      const res = await fetch("/api/plans/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planPath, schedulePath }),
+      });
       const data = await res.json();
       if (!res.ok) {
         setPlanError(data.error || "Could not read this plan.");
