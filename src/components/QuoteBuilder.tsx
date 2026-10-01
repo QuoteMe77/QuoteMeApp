@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { saveQuote, deleteQuoteAndRedirect, type QuoteItemInput, type QuoteMetaInput } from "@/app/dashboard/quotes/actions";
 import { downloadQuotePdf } from "@/lib/exportPdf";
@@ -126,13 +126,58 @@ export default function QuoteBuilder({
   const [search, setSearch] = useState("");
   const [activeArea, setActiveArea] = useState("General");
 
+  type PlanItemResult = {
+    room: string;
+    name: string;
+    cabinet_type: "base" | "wall" | "tall" | "other";
+    open: boolean;
+    calc: Calc;
+    qty: number;
+    unit: string;
+    material_hint: string;
+    drawer_count: number;
+    drawer_brand: string;
+    note: string;
+    confidence: string;
+  };
+
   const [planUploading, setPlanUploading] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
-  const [planResult, setPlanResult] = useState<{
-    items: { room: string; name: string; calc: Calc; qty: number; unit: string; note: string; confidence: string }[];
-    flags: string[];
-  } | null>(null);
+  const [planResult, setPlanResult] = useState<{ items: PlanItemResult[]; flags: string[] } | null>(null);
   const [selectedPlanItems, setSelectedPlanItems] = useState<Set<number>>(new Set());
+  // index -> chosen price_book_items.id for base/wall/tall items awaiting a material pick
+  const [planItemMaterial, setPlanItemMaterial] = useState<Record<number, string>>({});
+  const [scheduleFileName, setScheduleFileName] = useState<string | null>(null);
+  const scheduleFileRef = useRef<File | null>(null);
+
+  function categoryPrefixFor(cabinetType: string): string | null {
+    if (cabinetType === "base") return "Base cabinets";
+    if (cabinetType === "wall") return "Wall cabinets";
+    if (cabinetType === "tall") return "Tall cabinets";
+    return null;
+  }
+
+  function materialOptionsFor(it: PlanItemResult): PriceBookItem[] {
+    const prefix = categoryPrefixFor(it.cabinet_type);
+    if (!prefix) return [];
+    return priceBook.filter(
+      (p) => p.calc === "LM" && p.category.startsWith(prefix) && /open/i.test(p.name) === it.open
+    );
+  }
+
+  function bestMaterialMatch(options: PriceBookItem[], hint: string): PriceBookItem | null {
+    if (!hint.trim()) return null;
+    const h = hint.toLowerCase();
+    return options.find((o) => o.name.toLowerCase().includes(h)) || null;
+  }
+
+  function findDrawerHardware(brand: string): PriceBookItem | null {
+    const b = (brand.trim() || "Merivo").toLowerCase();
+    const candidates = priceBook.filter(
+      (p) => p.category.toLowerCase() === "hardware" && /^drawer -/i.test(p.name) && p.name.toLowerCase().includes(b)
+    );
+    return candidates.find((c) => !/push to open/i.test(c.name)) || candidates[0] || null;
+  }
 
   async function handlePlanUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -142,10 +187,12 @@ export default function QuoteBuilder({
     setPlanUploading(true);
     setPlanError(null);
     setPlanResult(null);
+    setPlanItemMaterial({});
 
     try {
       const formData = new FormData();
       formData.append("file", file);
+      if (scheduleFileRef.current) formData.append("schedule", scheduleFileRef.current);
       const res = await fetch("/api/plans/read", { method: "POST", body: formData });
       const data = await res.json();
       if (!res.ok) {
@@ -154,6 +201,13 @@ export default function QuoteBuilder({
       }
       setPlanResult(data);
       setSelectedPlanItems(new Set(data.items.map((_: unknown, i: number) => i)));
+      const defaults: Record<number, string> = {};
+      (data.items as PlanItemResult[]).forEach((it, i) => {
+        const options = materialOptionsFor(it);
+        const match = bestMaterialMatch(options, it.material_hint);
+        if (match) defaults[i] = match.id;
+      });
+      setPlanItemMaterial(defaults);
     } catch {
       setPlanError("Upload failed. Check your connection and try again.");
     } finally {
@@ -161,28 +215,63 @@ export default function QuoteBuilder({
     }
   }
 
+  function handleScheduleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] || null;
+    scheduleFileRef.current = file;
+    setScheduleFileName(file?.name || null);
+  }
+
   function addSelectedPlanItems() {
     if (!planResult) return;
-    const toAdd = planResult.items.filter((_, i) => selectedPlanItems.has(i));
-    setLineItems((prev) => [
-      ...prev,
-      ...toAdd.map((it) => ({
+    const toAdd = planResult.items
+      .map((it, i) => ({ it, i }))
+      .filter(({ i }) => selectedPlanItems.has(i));
+
+    const newLines: LineItem[] = [];
+    toAdd.forEach(({ it, i }) => {
+      const chosenId = planItemMaterial[i];
+      const chosen = chosenId ? priceBook.find((p) => p.id === chosenId) : null;
+      const needsMaterial = categoryPrefixFor(it.cabinet_type) !== null;
+
+      newLines.push({
         key: newKey(),
-        price_book_item_id: null,
+        price_book_item_id: chosen?.id ?? null,
         name: it.name,
-        category: "From plan",
+        category: chosen?.category ?? "From plan",
         calc: it.calc,
-        unit: it.unit,
-        rate: 0,
+        unit: chosen?.unit ?? it.unit,
+        rate: chosen ? Number(chosen.rate) : 0,
         qty: it.qty,
         area: it.room || "General",
-        note: it.note,
+        note: [it.note, chosen ? chosen.name : ""].filter(Boolean).join(" — "),
         pdf_label: "",
         poa: false,
-        flag_label: it.confidence === "low" ? "Check on site" : "",
-      })),
-    ]);
+        flag_label: needsMaterial && !chosen ? "Select material" : it.confidence === "low" ? "Check on site" : "",
+      });
+
+      if (it.drawer_count > 0) {
+        const hardware = findDrawerHardware(it.drawer_brand);
+        newLines.push({
+          key: newKey(),
+          price_book_item_id: hardware?.id ?? null,
+          name: hardware ? hardware.name : `Drawers — ${it.drawer_brand || "Merivo"} (not in price book)`,
+          category: "Hardware",
+          calc: "QTY",
+          unit: hardware?.unit ?? "ea",
+          rate: hardware ? Number(hardware.rate) : 0,
+          qty: it.drawer_count,
+          area: it.room || "General",
+          note: `For: ${it.name}`,
+          pdf_label: "",
+          poa: false,
+          flag_label: hardware ? "" : "Select drawer hardware",
+        });
+      }
+    });
+
+    setLineItems((prev) => [...prev, ...newLines]);
     setPlanResult(null);
+    setPlanItemMaterial({});
   }
 
   const searchResults = useMemo(() => {
@@ -496,10 +585,16 @@ export default function QuoteBuilder({
         <h3 className="font-display text-sm font-semibold mb-3 text-ink-soft uppercase tracking-wide">
           Read a plan
         </h3>
-        <label className="inline-block border border-line-strong rounded-md px-3 py-2 text-sm cursor-pointer hover:bg-paper">
-          {planUploading ? "Reading plan…" : "Upload a plan (PNG, JPEG or PDF)"}
-          <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" className="hidden" onChange={handlePlanUpload} disabled={planUploading} />
-        </label>
+        <div className="flex flex-wrap gap-2 items-center">
+          <label className="inline-block border border-line-strong rounded-md px-3 py-2 text-sm cursor-pointer hover:bg-paper">
+            {planUploading ? "Reading plan…" : "Upload a plan (PNG, JPEG or PDF)"}
+            <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" className="hidden" onChange={handlePlanUpload} disabled={planUploading} />
+          </label>
+          <label className="inline-block border border-line rounded-md px-3 py-2 text-xs cursor-pointer hover:bg-paper text-ink-soft">
+            {scheduleFileName ? `Schedule: ${scheduleFileName}` : "+ Attach finishes/hardware schedule (optional)"}
+            <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" className="hidden" onChange={handleScheduleUpload} disabled={planUploading} />
+          </label>
+        </div>
         {planError && <p className="text-brick text-sm mt-2">{planError}</p>}
 
         {planResult && (
@@ -514,32 +609,65 @@ export default function QuoteBuilder({
               <p className="text-sm text-ink-soft">No joinery items were identified on this plan.</p>
             ) : (
               <>
-                <div className="border border-line rounded-md divide-y divide-line max-h-80 overflow-y-auto mb-3">
-                  {planResult.items.map((it, i) => (
-                    <label key={i} className="flex items-start gap-2 px-3 py-2 text-sm hover:bg-paper cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="mt-1"
-                        checked={selectedPlanItems.has(i)}
-                        onChange={(e) => {
-                          setSelectedPlanItems((prev) => {
-                            const next = new Set(prev);
-                            if (e.target.checked) next.add(i);
-                            else next.delete(i);
-                            return next;
-                          });
-                        }}
-                      />
-                      <span className="flex-1">
-                        <span className="font-medium">{it.name}</span>
-                        <span className="text-ink-soft"> — {it.room} · {it.qty} {it.unit}</span>
-                        {it.note && <span className="block text-xs text-ink-soft">{it.note}</span>}
-                      </span>
-                      {it.confidence === "low" && (
-                        <span className="text-xs text-brick whitespace-nowrap">low confidence</span>
-                      )}
-                    </label>
-                  ))}
+                <div className="border border-line rounded-md divide-y divide-line max-h-96 overflow-y-auto mb-3">
+                  {planResult.items.map((it, i) => {
+                    const options = materialOptionsFor(it);
+                    const showMaterialPicker = options.length > 0;
+                    return (
+                      <div key={i} className="flex items-start gap-2 px-3 py-2 text-sm hover:bg-paper">
+                        <input
+                          type="checkbox"
+                          className="mt-1"
+                          checked={selectedPlanItems.has(i)}
+                          onChange={(e) => {
+                            setSelectedPlanItems((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(i);
+                              else next.delete(i);
+                              return next;
+                            });
+                          }}
+                        />
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium">{it.name}</span>
+                            <span className="text-ink-soft">
+                              — {it.room} · {it.qty} {it.unit}
+                              {it.drawer_count > 0 && ` · ${it.drawer_count} drawers`}
+                            </span>
+                            {it.confidence === "low" && (
+                              <span className="text-xs text-brick whitespace-nowrap">low confidence</span>
+                            )}
+                          </div>
+                          {it.note && <span className="block text-xs text-ink-soft">{it.note}</span>}
+                          {it.drawer_count > 0 && (
+                            <span className="block text-xs text-ink-soft">
+                              Drawers priced in: {it.drawer_brand || "Merivo (default — none nominated)"}
+                            </span>
+                          )}
+                          {showMaterialPicker && (
+                            <select
+                              className="input mt-1.5 text-xs"
+                              style={{ marginBottom: 0 }}
+                              value={planItemMaterial[i] || ""}
+                              onChange={(e) =>
+                                setPlanItemMaterial((prev) => ({ ...prev, [i]: e.target.value }))
+                              }
+                            >
+                              <option value="">
+                                {it.material_hint ? `Select material (plan says "${it.material_hint}")…` : "Select material…"}
+                              </option>
+                              {options.map((o) => (
+                                <option key={o.id} value={o.id}>
+                                  {o.name} — ${money(Number(o.rate))}/{o.unit}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="flex gap-2">
                   <button
@@ -554,7 +682,7 @@ export default function QuoteBuilder({
                   </button>
                 </div>
                 <p className="text-xs text-ink-soft mt-2">
-                  Rates aren&apos;t set automatically — set each item&apos;s rate from your price book after adding.
+                  Items added without a material picked above come in at $0, flagged &quot;Select material&quot; — set them from the price book search above.
                 </p>
               </>
             )}
@@ -668,6 +796,11 @@ function LineItemRow({
   const lineTotal = item.poa ? null : item.qty * item.rate;
   return (
     <div className="border border-line rounded-md p-2.5 flex flex-wrap items-center gap-2 bg-paper">
+      {item.flag_label && (
+        <span className="w-full text-xs font-medium text-brick bg-paper-raised border border-brick rounded px-2 py-1">
+          ⚠ {item.flag_label}
+        </span>
+      )}
       <input
         className="input flex-1 min-w-[180px]"
         value={item.name}
