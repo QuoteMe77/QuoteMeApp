@@ -273,12 +273,30 @@ export default function QuoteBuilder({
     return null;
   }
 
+  // Cabinet runs (base/wall/tall) are priced from a fixed LM category band;
+  // everything else — end panels, laundry chutes/hampers, LED strips,
+  // hardware call-outs, and any other discrete joinery scope — doesn't live
+  // in one predictable category, so it's matched by keyword relevance
+  // against the whole price book instead (excluding drawer-brand hardware,
+  // which is matched separately via drawer_count/drawer_brand).
   function materialOptionsFor(it: PlanItemResult): PriceBookItem[] {
     const prefix = categoryPrefixFor(it.cabinet_type);
-    if (!prefix) return [];
-    return priceBook.filter(
-      (p) => p.calc === "LM" && p.category.startsWith(prefix) && /open/i.test(p.name) === it.open
-    );
+    if (prefix) {
+      return priceBook.filter(
+        (p) => p.calc === "LM" && p.category.startsWith(prefix) && /open/i.test(p.name) === it.open
+      );
+    }
+
+    const keywords = materialKeywords(`${it.name} ${it.material_hint}`);
+    if (keywords.length === 0) return [];
+    const keywordSet = new Set(keywords);
+    return priceBook
+      .filter((p) => !(p.category.toLowerCase() === "hardware" && /^drawer -/i.test(p.name)))
+      .map((p) => ({ p, score: materialKeywords(`${p.category} ${p.name}`).filter((w) => keywordSet.has(w)).length }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map((x) => x.p);
   }
 
   const MATERIAL_STOPWORDS = new Set([
@@ -323,41 +341,69 @@ export default function QuoteBuilder({
     return { match: best, exact: bestScore >= 2 };
   }
 
+  // Drawings/schedules often nominate a drawer system by a short code
+  // rather than the full brand name (e.g. "ANT" for Blum Antaro), and the
+  // price book itself spells one brand differently to how it's normally
+  // written ("Anataro" rather than "Antaro"). Resolving through this table
+  // first means both the abbreviation and the "correct" spelling still find
+  // the price book's actual row.
+  const DRAWER_BRAND_ALIASES: Record<string, string> = {
+    ant: "anataro",
+    antaro: "anataro",
+    anataro: "anataro",
+    mer: "merivo",
+    merivo: "merivo",
+    leg: "legrabox",
+    legrabox: "legrabox",
+    mov: "movento",
+    movento: "movento",
+  };
+
   function findDrawerHardware(brand: string): PriceBookItem | null {
-    const hint = (brand.trim() || "Merivo").toLowerCase();
+    const raw = (brand.trim() || "Merivo").toLowerCase();
+    const tokens = raw.split(/[^a-z0-9]+/).filter(Boolean);
+    // "PTO" (push-to-open — no handle, opened by pressing the door/front) is
+    // a mechanism choice noted alongside the brand code, not a brand itself
+    // — e.g. "ANT PTO" — so it's pulled out separately rather than treated
+    // as part of the brand text.
+    const isPushToOpen = tokens.includes("pto") || raw.includes("push to open") || raw.includes("push-to-open");
+    // Keep both the original tokens and their alias resolutions so a
+    // substring check below matches regardless of which spelling/code the
+    // drawing used versus which spelling the price book uses.
+    const hint = [...tokens, ...tokens.map((t) => DRAWER_BRAND_ALIASES[t] || t)].join(" ");
     const drawerItems = priceBook.filter((p) => p.category.toLowerCase() === "hardware" && /^drawer -/i.test(p.name));
-    // The drawing/schedule brand text often carries a manufacturer or colour
-    // prefix the price book doesn't (e.g. "Blum Black Legrabox" vs the price
-    // book's "Legrabox (16mm ONLY)"), so check whether the hint *contains*
-    // the price book's brand word rather than the other way around.
     const matches = drawerItems.filter((p) => {
       const brandWord = p.name.replace(/^drawer\s*-\s*/i, "").split(/[\s(]/)[0].toLowerCase();
       return brandWord.length > 0 && hint.includes(brandWord);
     });
     const pool = matches.length > 0 ? matches : drawerItems.filter((p) => p.name.toLowerCase().includes("merivo"));
+    if (isPushToOpen) {
+      // Not every brand in the price book has its own push-to-open row —
+      // fall back to that brand's standard row rather than silently
+      // switching brands if one doesn't exist.
+      return pool.find((c) => /push to open/i.test(c.name)) || pool[0] || null;
+    }
     return pool.find((c) => !/push to open/i.test(c.name)) || pool[0] || null;
   }
 
   // Builds the amber confirmation note shown under a plan-read item: carries
   // forward anything the AI noted about the item, then explains how the
-  // material got matched (or why it couldn't be) so the estimator knows
-  // exactly what to double-check rather than just seeing a bare "confirm".
-  function buildMaterialFlag(it: PlanItemResult, matched: PriceBookItem | null, exact: boolean): string {
+  // item got matched (or why it couldn't be) so the estimator knows exactly
+  // what to double-check rather than just seeing a bare "confirm". Applies
+  // to every item, not just cabinet runs — an unmatched laundry chute or
+  // end panel needs the same kind of flag as an unmatched finish.
+  function buildMaterialFlag(it: PlanItemResult, options: PriceBookItem[], matched: PriceBookItem | null, exact: boolean): string {
     const parts: string[] = [];
     if (it.note) parts.push(it.note);
-    const needsMaterial = categoryPrefixFor(it.cabinet_type) !== null;
-    if (needsMaterial) {
-      if (matched && exact) {
-        // Confident match — nothing further to add.
-      } else if (matched && !exact) {
-        parts.push(
-          `Closest price-book match to the drawing's "${it.material_hint || "unspecified finish"}" — confirm there's no cost delta for the exact colour/finish.`
-        );
-      } else if (it.material_hint) {
-        parts.push(`Could not match "${it.material_hint}" in the price book — please pick the closest material.`);
-      } else {
-        parts.push("No material specified on the drawing or schedule — please select one.");
-      }
+    const hintText = [it.material_hint, it.name].filter(Boolean).join(" — ");
+    if (matched && exact) {
+      // Confident match — nothing further to add.
+    } else if (matched && !exact) {
+      parts.push(`Closest price-book match to "${hintText}" — confirm there's no cost delta for the exact item/finish.`);
+    } else if (options.length > 0) {
+      parts.push(`Could not confidently match "${hintText}" — please pick from the options below.`);
+    } else {
+      parts.push(`Not found in your price book — add pricing for this manually.`);
     }
     if (it.confidence === "low") parts.push("Low confidence — check on site.");
     return parts.join(" ");
@@ -452,9 +498,9 @@ export default function QuoteBuilder({
       const flags: Record<number, string> = {};
       (data.items as PlanItemResult[]).forEach((it, i) => {
         const options = materialOptionsFor(it);
-        const { match, exact } = bestMaterialMatch(options, it.material_hint);
+        const { match, exact } = bestMaterialMatch(options, `${it.name} ${it.material_hint}`);
         if (match) defaults[i] = match.id;
-        flags[i] = buildMaterialFlag(it, match, exact);
+        flags[i] = buildMaterialFlag(it, options, match, exact);
       });
       setPlanItemMaterial(defaults);
       setPlanItemFlag(flags);
@@ -1128,7 +1174,7 @@ export default function QuoteBuilder({
                               }}
                             >
                               <option value="">
-                                {it.material_hint ? `No match — plan says "${it.material_hint}"` : "Select material…"}
+                                {it.material_hint ? `No confident match — plan says "${it.material_hint}"` : "Select item…"}
                               </option>
                               {options.map((o) => (
                                 <option key={o.id} value={o.id}>
