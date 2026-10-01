@@ -16,7 +16,16 @@ import * as pdfjsLib from "pdfjs-dist";
 // the joinery-relevant sheets anyway.
 const PDF_PICKER_THRESHOLD_BYTES = 8 * 1024 * 1024;
 const UPLOAD_HARD_LIMIT_BYTES = 45 * 1024 * 1024; // stay under Supabase's 50MB cap with headroom
+// The Anthropic API itself caps a single request body at ~32MB. We send
+// files base64-encoded inside one JSON request, which inflates raw bytes by
+// roughly 4/3 — so the combined plan + schedule size needs checking against
+// this before upload, independently of Supabase's much larger ceiling.
+const ANTHROPIC_REQUEST_LIMIT_BYTES = 32 * 1024 * 1024;
 const PDFJS_VERSION = "3.11.174";
+
+function estimateBase64Size(rawBytes: number): number {
+  return Math.ceil(rawBytes / 3) * 4;
+}
 
 let pdfjsWorkerConfigured = false;
 function ensurePdfjsWorker() {
@@ -376,6 +385,22 @@ export default function QuoteBuilder({
     setPlanError(null);
     setPlanResult(null);
     setPlanItemMaterial({});
+    setPlanItemFlag({});
+
+    // Checked here, before anything is uploaded, because this is the one
+    // call site every upload path goes through (direct or via the page
+    // picker) — catches the Anthropic request-size limit regardless of how
+    // the files got here, rather than finding out from a 413 afterwards.
+    const estimatedRequestBytes = estimateBase64Size(planFile.size) + estimateBase64Size(scheduleFile?.size ?? 0);
+    if (estimatedRequestBytes > ANTHROPIC_REQUEST_LIMIT_BYTES) {
+      setPlanUploading(false);
+      setPlanError(
+        `This would send about ${(estimatedRequestBytes / (1024 * 1024)).toFixed(1)}MB to the AI once encoded — over its ~32MB request limit. Select fewer pages${
+          scheduleFile ? ", or a smaller finishes schedule," : ""
+        } and try again.`
+      );
+      return;
+    }
 
     try {
       const supabase = createBrowserClient();
