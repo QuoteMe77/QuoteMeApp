@@ -450,22 +450,22 @@ export default function QuoteBuilder({
         <h3 className="font-display text-sm font-semibold mb-3 text-ink-soft uppercase tracking-wide">
           Add items
         </h3>
-        <div className="flex gap-3 mb-3">
+        <div className="flex flex-wrap gap-3 mb-3">
           <input
-            className="input flex-1"
+            className="input flex-1 min-w-[200px]"
             placeholder="Search your price book…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
           <input
-            className="input w-44"
+            className="input w-44 shrink-0"
             placeholder="Room / area"
             value={activeArea}
             onChange={(e) => setActiveArea(e.target.value || "General")}
           />
           <button
             onClick={addCustomItem}
-            className="whitespace-nowrap border border-line-strong rounded-md px-3 py-2 text-sm hover:bg-paper"
+            className="whitespace-nowrap shrink-0 border border-line-strong rounded-md px-3 py-2 text-sm hover:bg-paper"
           >
             + Custom item
           </button>
