@@ -7,6 +7,7 @@ import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { downloadQuotePdf } from "@/lib/exportPdf";
 import { downloadQuoteDocx } from "@/lib/exportDocx";
 import { PDFDocument } from "pdf-lib";
+import * as pdfjsLib from "pdfjs-dist";
 
 // Above this size, a PDF is routed through the page-picker instead of being
 // uploaded whole — a full multi-trade construction document set can run to
@@ -15,6 +16,21 @@ import { PDFDocument } from "pdf-lib";
 // the joinery-relevant sheets anyway.
 const PDF_PICKER_THRESHOLD_BYTES = 8 * 1024 * 1024;
 const UPLOAD_HARD_LIMIT_BYTES = 45 * 1024 * 1024; // stay under Supabase's 50MB cap with headroom
+const PDFJS_VERSION = "3.11.174";
+
+let pdfjsWorkerConfigured = false;
+function ensurePdfjsWorker() {
+  if (pdfjsWorkerConfigured) return;
+  // Loaded from jsDelivr rather than bundled: pinning an exact version here
+  // guarantees the worker file matches the installed pdfjs-dist version
+  // without pulling Next.js's webpack config into web-worker bundling.
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.js`;
+  pdfjsWorkerConfigured = true;
+}
+
+function allPageIndices(pageCount: number): Set<number> {
+  return new Set(Array.from({ length: pageCount }, (_, i) => i));
+}
 
 function parsePageSpec(spec: string, pageCount: number): number[] {
   const trimmed = spec.trim();
@@ -38,16 +54,61 @@ function parsePageSpec(spec: string, pageCount: number): number[] {
   return Array.from(indices).sort((a, b) => a - b);
 }
 
-async function extractPdfPages(file: File, pageSpec: string): Promise<File> {
+// Turns a selected set of (0-indexed) pages back into a compact "4, 7, 12-14"
+// string, so the text field stays in sync after the user clicks thumbnails.
+function serializePageSpec(indices: Set<number>, pageCount: number): string {
+  if (indices.size === 0 || indices.size === pageCount) return "";
+  const sorted = Array.from(indices).sort((a, b) => a - b);
+  const parts: string[] = [];
+  let start = sorted[0];
+  let prev = sorted[0];
+  for (let i = 1; i <= sorted.length; i++) {
+    const cur = sorted[i];
+    if (cur === prev + 1) {
+      prev = cur;
+      continue;
+    }
+    parts.push(start === prev ? `${start + 1}` : `${start + 1}-${prev + 1}`);
+    if (cur === undefined) break;
+    start = cur;
+    prev = cur;
+  }
+  return parts.join(", ");
+}
+
+async function extractPdfPages(file: File, indices: number[]): Promise<File> {
   const srcBytes = await file.arrayBuffer();
   const srcDoc = await PDFDocument.load(srcBytes);
-  const indices = parsePageSpec(pageSpec, srcDoc.getPageCount());
   const newDoc = await PDFDocument.create();
   const copiedPages = await newDoc.copyPages(srcDoc, indices);
   copiedPages.forEach((p) => newDoc.addPage(p));
   const newBytes = await newDoc.save();
   const baseName = file.name.replace(/\.pdf$/i, "");
   return new File([newBytes as BlobPart], `${baseName}-selected.pdf`, { type: "application/pdf" });
+}
+
+// Renders a low-res JPEG thumbnail of every page so the user can see what
+// they're picking instead of guessing from page numbers alone. Thumbnails
+// are reported back one at a time via onPage so the grid fills in
+// progressively on a 50-100 page document instead of showing nothing for a
+// long time.
+async function renderPdfThumbnails(file: File, onPage: (index: number, dataUrl: string) => void): Promise<void> {
+  ensurePdfjsWorker();
+  const data = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data }).promise;
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: 0.3 });
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      onPage(i - 1, canvas.toDataURL("image/jpeg", 0.5));
+    }
+    page.cleanup();
+  }
 }
 
 type Calc = "LM" | "QTY" | "MISC";
@@ -232,7 +293,9 @@ export default function QuoteBuilder({
     target: "plan" | "schedule";
     file: File;
     pageCount: number;
+    selectedPages: Set<number>; // 0-indexed
     pagesInput: string;
+    thumbnails: string[]; // data URLs, "" until that page has rendered
     busy: boolean;
     error: string | null;
   };
@@ -304,19 +367,51 @@ export default function QuoteBuilder({
     }
   }
 
+  async function openPdfPicker(target: "plan" | "schedule", file: File) {
+    setPlanError(null);
+    let pageCount: number;
+    try {
+      const srcDoc = await PDFDocument.load(await file.arrayBuffer());
+      pageCount = srcDoc.getPageCount();
+    } catch {
+      setPlanError("Could not open this PDF to select pages. Please try again.");
+      return;
+    }
+
+    setPdfPicker({
+      target,
+      file,
+      pageCount,
+      selectedPages: allPageIndices(pageCount),
+      pagesInput: "",
+      thumbnails: new Array(pageCount).fill(""),
+      busy: false,
+      error: null,
+    });
+
+    // Renders in the background and fills the grid in as each page is
+    // ready — a 60+ page CD set can take a while, so there's no point
+    // blocking the picker on it.
+    renderPdfThumbnails(file, (index, dataUrl) => {
+      setPdfPicker((prev) => {
+        if (!prev || prev.file !== file) return prev;
+        const thumbnails = [...prev.thumbnails];
+        thumbnails[index] = dataUrl;
+        return { ...prev, thumbnails };
+      });
+    }).catch(() => {
+      // Previews are a convenience, not a requirement — the page-number
+      // text field still works even if rendering them fails.
+    });
+  }
+
   async function handlePlanUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
 
     if (file.type === "application/pdf" && file.size > PDF_PICKER_THRESHOLD_BYTES) {
-      setPlanError(null);
-      try {
-        const srcDoc = await PDFDocument.load(await file.arrayBuffer());
-        setPdfPicker({ target: "plan", file, pageCount: srcDoc.getPageCount(), pagesInput: "", busy: false, error: null });
-      } catch {
-        setPlanError("Could not open this PDF to select pages. Please try again.");
-      }
+      openPdfPicker("plan", file);
       return;
     }
 
@@ -333,13 +428,7 @@ export default function QuoteBuilder({
     }
 
     if (file.type === "application/pdf" && file.size > PDF_PICKER_THRESHOLD_BYTES) {
-      setPlanError(null);
-      try {
-        const srcDoc = await PDFDocument.load(await file.arrayBuffer());
-        setPdfPicker({ target: "schedule", file, pageCount: srcDoc.getPageCount(), pagesInput: "", busy: false, error: null });
-      } catch {
-        setPlanError("Could not open this PDF to select pages. Please try again.");
-      }
+      openPdfPicker("schedule", file);
       return;
     }
 
@@ -347,11 +436,43 @@ export default function QuoteBuilder({
     setScheduleFileName(file.name);
   }
 
+  function togglePickerPage(index: number) {
+    setPdfPicker((prev) => {
+      if (!prev) return prev;
+      const selectedPages = new Set(prev.selectedPages);
+      if (selectedPages.has(index)) selectedPages.delete(index);
+      else selectedPages.add(index);
+      return { ...prev, selectedPages, pagesInput: serializePageSpec(selectedPages, prev.pageCount), error: null };
+    });
+  }
+
+  function setPickerPagesInput(value: string) {
+    setPdfPicker((prev) => {
+      if (!prev) return prev;
+      const selectedPages =
+        value.trim() === "" ? allPageIndices(prev.pageCount) : new Set(parsePageSpec(value, prev.pageCount));
+      return { ...prev, pagesInput: value, selectedPages, error: null };
+    });
+  }
+
+  function selectAllPickerPages() {
+    setPdfPicker((prev) => (prev ? { ...prev, selectedPages: allPageIndices(prev.pageCount), pagesInput: "", error: null } : prev));
+  }
+
+  function selectNonePickerPages() {
+    setPdfPicker((prev) => (prev ? { ...prev, selectedPages: new Set(), pagesInput: "", error: null } : prev));
+  }
+
   async function confirmPdfPicker() {
     if (!pdfPicker) return;
+    if (pdfPicker.selectedPages.size === 0) {
+      setPdfPicker((prev) => (prev ? { ...prev, error: "Select at least one page." } : prev));
+      return;
+    }
     setPdfPicker((prev) => (prev ? { ...prev, busy: true, error: null } : prev));
     try {
-      const extracted = await extractPdfPages(pdfPicker.file, pdfPicker.pagesInput);
+      const indices = Array.from(pdfPicker.selectedPages).sort((a, b) => a - b);
+      const extracted = await extractPdfPages(pdfPicker.file, indices);
       if (extracted.size > UPLOAD_HARD_LIMIT_BYTES) {
         setPdfPicker((prev) =>
           prev
@@ -767,15 +888,69 @@ export default function QuoteBuilder({
               {pdfPicker.pageCount} pages).
             </p>
             <p className="text-xs text-ink-soft mb-3">
-              Pick just the pages you need (e.g. "4, 7, 12-14"). Leave blank to use every page.
+              Click the sheets you need below, or type page numbers (e.g. "4, 7, 12-14"). All pages are selected by
+              default — click a thumbnail to drop it, or start from none and add just what you need.
             </p>
+
+            <div className="flex flex-wrap gap-2 items-center mb-3">
+              <button
+                onClick={selectAllPickerPages}
+                disabled={pdfPicker.busy}
+                className="shrink-0 border border-line-strong rounded-md px-2.5 py-1 text-xs hover:bg-white disabled:opacity-50"
+              >
+                Select all
+              </button>
+              <button
+                onClick={selectNonePickerPages}
+                disabled={pdfPicker.busy}
+                className="shrink-0 border border-line-strong rounded-md px-2.5 py-1 text-xs hover:bg-white disabled:opacity-50"
+              >
+                Select none
+              </button>
+              <span className="text-xs text-ink-soft">
+                {pdfPicker.selectedPages.size} of {pdfPicker.pageCount} pages selected
+              </span>
+            </div>
+
+            <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2 max-h-96 overflow-y-auto border border-line rounded-md p-2 mb-3 bg-white">
+              {Array.from({ length: pdfPicker.pageCount }).map((_, i) => {
+                const isSelected = pdfPicker.selectedPages.has(i);
+                const thumb = pdfPicker.thumbnails[i];
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => togglePickerPage(i)}
+                    disabled={pdfPicker.busy}
+                    className={`relative rounded border overflow-hidden text-left disabled:opacity-50 ${
+                      isSelected ? "border-ink ring-2 ring-ink" : "border-line opacity-50 hover:opacity-80"
+                    }`}
+                    title={`Page ${i + 1}`}
+                  >
+                    {thumb ? (
+                      // Low-res client-rendered previews, not user content requiring alt text beyond the page number.
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={thumb} alt={`Page ${i + 1}`} className="w-full h-auto block" />
+                    ) : (
+                      <div className="aspect-[3/4] flex items-center justify-center text-[10px] text-ink-soft bg-paper">
+                        Loading…
+                      </div>
+                    )}
+                    <span className="absolute bottom-0.5 right-0.5 bg-ink text-paper text-[10px] leading-none px-1 py-0.5 rounded-sm">
+                      {i + 1}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="flex flex-wrap gap-2 items-center">
               <input
                 type="text"
                 className="input min-w-[200px] flex-1"
                 placeholder={`Page numbers (1–${pdfPicker.pageCount})`}
                 value={pdfPicker.pagesInput}
-                onChange={(e) => setPdfPicker((prev) => (prev ? { ...prev, pagesInput: e.target.value, error: null } : prev))}
+                onChange={(e) => setPickerPagesInput(e.target.value)}
                 disabled={pdfPicker.busy}
               />
               <button
