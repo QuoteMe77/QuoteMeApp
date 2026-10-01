@@ -252,6 +252,8 @@ export default function QuoteBuilder({
   const [selectedPlanItems, setSelectedPlanItems] = useState<Set<number>>(new Set());
   // index -> chosen price_book_items.id for base/wall/tall items awaiting a material pick
   const [planItemMaterial, setPlanItemMaterial] = useState<Record<number, string>>({});
+  // index -> note explaining the match (or lack of one) for that item, shown to the estimator
+  const [planItemFlag, setPlanItemFlag] = useState<Record<number, string>>({});
   const [scheduleFileName, setScheduleFileName] = useState<string | null>(null);
   const scheduleFileRef = useRef<File | null>(null);
 
@@ -270,18 +272,86 @@ export default function QuoteBuilder({
     );
   }
 
-  function bestMaterialMatch(options: PriceBookItem[], hint: string): PriceBookItem | null {
-    if (!hint.trim()) return null;
-    const h = hint.toLowerCase();
-    return options.find((o) => o.name.toLowerCase().includes(h)) || null;
+  const MATERIAL_STOPWORDS = new Set([
+    "mm", "with", "and", "the", "including", "collection", "series", "range", "doors", "door", "panel",
+    "from", "white", "cabinet", "base", "wall", "tall", "open",
+  ]);
+
+  function materialKeywords(s: string): string[] {
+    return s
+      .toLowerCase()
+      .replace(/[()/]/g, " ")
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 2 && !MATERIAL_STOPWORDS.has(w));
+  }
+
+  // Matches the finish named on the drawing/schedule (material_hint) against
+  // the price book by keyword overlap rather than requiring one string to
+  // literally contain the other — real-world hints ("Farmers Slimlined
+  // Natural Matte Limewash") rarely appear verbatim in a price book line
+  // ("Base Cabinet - 22mm Farmers Doors Weathered Slimline Oak Stained"), so
+  // a literal substring check almost never fires. Returns the best-scoring
+  // option even on a weak match, plus whether that match is confident enough
+  // to treat as exact — callers should still flag a non-exact match for the
+  // estimator to confirm rather than silently trusting it.
+  function bestMaterialMatch(options: PriceBookItem[], hint: string): { match: PriceBookItem | null; exact: boolean } {
+    if (!hint.trim() || options.length === 0) return { match: null, exact: false };
+    const hintWords = materialKeywords(hint);
+    if (hintWords.length === 0) return { match: null, exact: false };
+    const hintSet = new Set(hintWords);
+
+    let best: PriceBookItem | null = null;
+    let bestScore = 0;
+    for (const o of options) {
+      const words = materialKeywords(o.name);
+      const score = words.filter((w) => hintSet.has(w)).length;
+      if (score > bestScore) {
+        bestScore = score;
+        best = o;
+      }
+    }
+    if (!best) return { match: null, exact: false };
+    return { match: best, exact: bestScore >= 2 };
   }
 
   function findDrawerHardware(brand: string): PriceBookItem | null {
-    const b = (brand.trim() || "Merivo").toLowerCase();
-    const candidates = priceBook.filter(
-      (p) => p.category.toLowerCase() === "hardware" && /^drawer -/i.test(p.name) && p.name.toLowerCase().includes(b)
-    );
-    return candidates.find((c) => !/push to open/i.test(c.name)) || candidates[0] || null;
+    const hint = (brand.trim() || "Merivo").toLowerCase();
+    const drawerItems = priceBook.filter((p) => p.category.toLowerCase() === "hardware" && /^drawer -/i.test(p.name));
+    // The drawing/schedule brand text often carries a manufacturer or colour
+    // prefix the price book doesn't (e.g. "Blum Black Legrabox" vs the price
+    // book's "Legrabox (16mm ONLY)"), so check whether the hint *contains*
+    // the price book's brand word rather than the other way around.
+    const matches = drawerItems.filter((p) => {
+      const brandWord = p.name.replace(/^drawer\s*-\s*/i, "").split(/[\s(]/)[0].toLowerCase();
+      return brandWord.length > 0 && hint.includes(brandWord);
+    });
+    const pool = matches.length > 0 ? matches : drawerItems.filter((p) => p.name.toLowerCase().includes("merivo"));
+    return pool.find((c) => !/push to open/i.test(c.name)) || pool[0] || null;
+  }
+
+  // Builds the amber confirmation note shown under a plan-read item: carries
+  // forward anything the AI noted about the item, then explains how the
+  // material got matched (or why it couldn't be) so the estimator knows
+  // exactly what to double-check rather than just seeing a bare "confirm".
+  function buildMaterialFlag(it: PlanItemResult, matched: PriceBookItem | null, exact: boolean): string {
+    const parts: string[] = [];
+    if (it.note) parts.push(it.note);
+    const needsMaterial = categoryPrefixFor(it.cabinet_type) !== null;
+    if (needsMaterial) {
+      if (matched && exact) {
+        // Confident match — nothing further to add.
+      } else if (matched && !exact) {
+        parts.push(
+          `Closest price-book match to the drawing's "${it.material_hint || "unspecified finish"}" — confirm there's no cost delta for the exact colour/finish.`
+        );
+      } else if (it.material_hint) {
+        parts.push(`Could not match "${it.material_hint}" in the price book — please pick the closest material.`);
+      } else {
+        parts.push("No material specified on the drawing or schedule — please select one.");
+      }
+    }
+    if (it.confidence === "low") parts.push("Low confidence — check on site.");
+    return parts.join(" ");
   }
 
   function storagePathFor(userId: string, file: File) {
@@ -354,12 +424,15 @@ export default function QuoteBuilder({
       setPlanResult(data);
       setSelectedPlanItems(new Set(data.items.map((_: unknown, i: number) => i)));
       const defaults: Record<number, string> = {};
+      const flags: Record<number, string> = {};
       (data.items as PlanItemResult[]).forEach((it, i) => {
         const options = materialOptionsFor(it);
-        const match = bestMaterialMatch(options, it.material_hint);
+        const { match, exact } = bestMaterialMatch(options, it.material_hint);
         if (match) defaults[i] = match.id;
+        flags[i] = buildMaterialFlag(it, match, exact);
       });
       setPlanItemMaterial(defaults);
+      setPlanItemFlag(flags);
     } catch {
       setPlanError("Upload failed. Check your connection and try again.");
     } finally {
@@ -515,7 +588,6 @@ export default function QuoteBuilder({
     toAdd.forEach(({ it, i }) => {
       const chosenId = planItemMaterial[i];
       const chosen = chosenId ? priceBook.find((p) => p.id === chosenId) : null;
-      const needsMaterial = categoryPrefixFor(it.cabinet_type) !== null;
 
       newLines.push({
         key: newKey(),
@@ -527,10 +599,10 @@ export default function QuoteBuilder({
         rate: chosen ? Number(chosen.rate) : 0,
         qty: it.qty,
         area: it.room || "General",
-        note: [it.note, chosen ? chosen.name : ""].filter(Boolean).join(" — "),
-        pdf_label: "",
+        note: chosen ? chosen.name : "",
+        pdf_label: it.name,
         poa: false,
-        flag_label: needsMaterial && !chosen ? "Select material" : it.confidence === "low" ? "Check on site" : "",
+        flag_label: planItemFlag[i] ?? "",
       });
 
       if (it.drawer_count > 0) {
@@ -556,6 +628,7 @@ export default function QuoteBuilder({
     setLineItems((prev) => [...prev, ...newLines]);
     setPlanResult(null);
     setPlanItemMaterial({});
+    setPlanItemFlag({});
   }
 
   const searchResults = useMemo(() => {
@@ -577,16 +650,6 @@ export default function QuoteBuilder({
     set.add(activeArea);
     return Array.from(set);
   }, [lineItems, activeArea]);
-
-  const grouped = useMemo(() => {
-    const map = new Map<string, LineItem[]>();
-    lineItems.forEach((it) => {
-      const area = it.area || "General";
-      if (!map.has(area)) map.set(area, []);
-      map.get(area)!.push(it);
-    });
-    return map;
-  }, [lineItems]);
 
   const subtotal = useMemo(
     () => lineItems.reduce((sum, it) => (it.poa ? sum : sum + it.qty * it.rate), 0),
@@ -708,7 +771,10 @@ export default function QuoteBuilder({
       markupPct: Number(markupPct) || 0,
       notes,
       items: lineItems.map((it) => ({
-        name: it.name,
+        // The quote shows what the client should see on paper — the
+        // original drawing wording when the estimator has set one,
+        // otherwise the internal item name.
+        name: it.pdf_label || it.name,
         category: it.category,
         unit: it.unit,
         rate: it.rate,
@@ -1010,11 +1076,8 @@ export default function QuoteBuilder({
                               — {it.room} · {it.qty} {it.unit}
                               {it.drawer_count > 0 && ` · ${it.drawer_count} drawers`}
                             </span>
-                            {it.confidence === "low" && (
-                              <span className="text-xs text-brick whitespace-nowrap">low confidence</span>
-                            )}
                           </div>
-                          {it.note && <span className="block text-xs text-ink-soft">{it.note}</span>}
+                          {planItemFlag[i] && <span className="block text-xs text-brick mt-0.5">⚠ {planItemFlag[i]}</span>}
                           {it.drawer_count > 0 && (
                             <span className="block text-xs text-ink-soft">
                               Drawers priced in: {it.drawer_brand || "Merivo (default — none nominated)"}
@@ -1025,12 +1088,22 @@ export default function QuoteBuilder({
                               className="input mt-1.5 text-xs"
                               style={{ marginBottom: 0 }}
                               value={planItemMaterial[i] || ""}
-                              onChange={(e) =>
-                                setPlanItemMaterial((prev) => ({ ...prev, [i]: e.target.value }))
-                              }
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                setPlanItemMaterial((prev) => ({ ...prev, [i]: value }));
+                                // Manually picking counts as confirming it — drop the
+                                // "closest match, please confirm" wording but keep
+                                // anything else (location notes, low-confidence flag).
+                                setPlanItemFlag((prev) => ({
+                                  ...prev,
+                                  [i]: [it.note, it.confidence === "low" ? "Low confidence — check on site." : ""]
+                                    .filter(Boolean)
+                                    .join(" "),
+                                }));
+                              }}
                             >
                               <option value="">
-                                {it.material_hint ? `Select material (plan says "${it.material_hint}")…` : "Select material…"}
+                                {it.material_hint ? `No match — plan says "${it.material_hint}"` : "Select material…"}
                               </option>
                               {options.map((o) => (
                                 <option key={o.id} value={o.id}>
@@ -1052,12 +1125,20 @@ export default function QuoteBuilder({
                   >
                     Add selected to quote
                   </button>
-                  <button onClick={() => setPlanResult(null)} className="text-sm text-ink-soft underline">
+                  <button
+                    onClick={() => {
+                      setPlanResult(null);
+                      setPlanItemMaterial({});
+                      setPlanItemFlag({});
+                    }}
+                    className="text-sm text-ink-soft underline"
+                  >
                     Discard
                   </button>
                 </div>
                 <p className="text-xs text-ink-soft mt-2">
-                  Items added without a material picked above come in at $0, flagged &quot;Select material&quot; — set them from the price book search above.
+                  Materials are matched automatically from the drawing and finishes schedule — items marked ⚠ above
+                  are worth double-checking before you quote.
                 </p>
               </>
             )}
@@ -1065,7 +1146,7 @@ export default function QuoteBuilder({
         )}
       </section>
 
-      {/* Ledger, grouped by area */}
+      {/* Ledger */}
       <section className="bg-paper-raised border border-line-strong rounded-lg p-5 mb-5">
         <h3 className="font-display text-sm font-semibold mb-3 text-ink-soft uppercase tracking-wide">
           Line items
@@ -1073,18 +1154,34 @@ export default function QuoteBuilder({
         {lineItems.length === 0 ? (
           <p className="text-sm text-ink-soft">No items yet — search the price book above to add some.</p>
         ) : (
-          areas
-            .filter((area) => (grouped.get(area) || []).length > 0)
-            .map((area) => (
-              <div key={area} className="mb-5 last:mb-0">
-                <h4 className="text-xs font-semibold text-brass-deep uppercase tracking-wide mb-2">{area}</h4>
-                <div className="space-y-2">
-                  {(grouped.get(area) || []).map((it) => (
-                    <LineItemRow key={it.key} item={it} onChange={(patch) => updateItem(it.key, patch)} onRemove={() => removeItem(it.key)} />
-                  ))}
-                </div>
-              </div>
-            ))
+          <>
+            <datalist id="quote-areas">
+              {areas.map((a) => (
+                <option key={a} value={a} />
+              ))}
+            </datalist>
+            <div className="hidden sm:grid grid-cols-[2rem_1fr_6rem_7rem_7rem_7rem_2rem] gap-3 px-1 pb-2 text-xs font-semibold text-ink-soft uppercase tracking-wide border-b border-line">
+              <span>#</span>
+              <span>Item</span>
+              <span className="text-right">Qty</span>
+              <span className="text-right">Cost/unit</span>
+              <span className="text-right">Sell/unit</span>
+              <span className="text-right">Line total</span>
+              <span />
+            </div>
+            <div className="divide-y divide-line">
+              {lineItems.map((it, index) => (
+                <LineItemRow
+                  key={it.key}
+                  index={index + 1}
+                  item={it}
+                  markupPct={Number(markupPct) || 0}
+                  onChange={(patch) => updateItem(it.key, patch)}
+                  onRemove={() => removeItem(it.key)}
+                />
+              ))}
+            </div>
+          </>
         )}
       </section>
 
@@ -1160,64 +1257,116 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function LineItemRow({
+  index,
   item,
+  markupPct,
   onChange,
   onRemove,
 }: {
+  index: number;
   item: LineItem;
+  markupPct: number;
   onChange: (patch: Partial<LineItem>) => void;
   onRemove: () => void;
 }) {
-  const lineTotal = item.poa ? null : item.qty * item.rate;
+  const sellRate = item.rate * (1 + markupPct / 100);
+  const lineTotal = item.poa ? null : item.qty * sellRate;
+  const showCategory = item.category && item.category !== "Custom" && item.category !== "From plan";
+
   return (
-    <div className="border border-line rounded-md p-2.5 flex flex-wrap items-center gap-2 bg-paper">
-      {item.flag_label && (
-        <span className="w-full text-xs font-medium text-brick bg-paper-raised border border-brick rounded px-2 py-1">
-          ⚠ {item.flag_label}
-        </span>
-      )}
-      <input
-        className="input flex-1 min-w-[180px]"
-        value={item.name}
-        onChange={(e) => onChange({ name: e.target.value })}
-      />
-      <input
-        type="number"
-        step="0.01"
-        className="input w-20"
-        value={item.qty}
-        onChange={(e) => onChange({ qty: Number(e.target.value) })}
-        title="Quantity"
-      />
-      <span className="text-xs text-ink-soft w-10">{item.unit}</span>
-      <input
-        type="number"
-        step="0.01"
-        className="input w-24"
-        value={item.rate}
-        onChange={(e) => onChange({ rate: Number(e.target.value) })}
-        title="Rate"
-      />
-      <label className="flex items-center gap-1 text-xs text-ink-soft whitespace-nowrap">
-        <input type="checkbox" checked={item.poa} onChange={(e) => onChange({ poa: e.target.checked })} />
-        POA
-      </label>
-      <span className="font-mono text-sm w-24 text-right">{item.poa ? "POA" : `$${money(lineTotal!)}`}</span>
-      <input
-        className="input w-28 text-xs"
-        placeholder="Room"
-        value={item.area}
-        onChange={(e) => onChange({ area: e.target.value || "General" })}
-      />
-      <button onClick={onRemove} className="text-brick text-xs px-2" title="Remove item">
-        ✕
-      </button>
-      <input
-        className="input w-full text-xs"
-        placeholder="Note (shown on quote)"
-        value={item.note}
-        onChange={(e) => onChange({ note: e.target.value })}
-      />
+    <div className="grid grid-cols-1 sm:grid-cols-[2rem_1fr_6rem_7rem_7rem_7rem_2rem] gap-2 sm:gap-3 items-start py-3 px-1">
+      <span className="hidden sm:block text-xs text-ink-soft pt-2">{index}</span>
+
+      <div className="min-w-0">
+        <input
+          className="input font-medium"
+          value={item.name}
+          onChange={(e) => onChange({ name: e.target.value })}
+          placeholder="Item name"
+        />
+        {showCategory && <p className="text-xs text-ink-soft mt-1">{item.category}</p>}
+        {item.flag_label && (
+          <p className="text-xs font-medium text-brick bg-paper border border-brick rounded px-2 py-1 mt-1.5">
+            ⚠ {item.flag_label}
+          </p>
+        )}
+        <label className="block mt-1.5">
+          <span className="block text-[10px] uppercase tracking-wide text-ink-soft">PDF wording</span>
+          <input
+            className="input text-xs mt-0.5"
+            placeholder="How this reads on the drawing (optional, shown on the quote if set)"
+            value={item.pdf_label}
+            onChange={(e) => onChange({ pdf_label: e.target.value })}
+          />
+        </label>
+        <label className="block mt-1.5">
+          <span className="block text-[10px] uppercase tracking-wide text-ink-soft">Room</span>
+          <input
+            className="input text-xs mt-0.5"
+            list="quote-areas"
+            value={item.area}
+            onChange={(e) => onChange({ area: e.target.value || "General" })}
+          />
+        </label>
+        <label className="block mt-1.5">
+          <span className="block text-[10px] uppercase tracking-wide text-ink-soft">Note</span>
+          <input
+            className="input text-xs mt-0.5"
+            placeholder="Note (shown on quote)"
+            value={item.note}
+            onChange={(e) => onChange({ note: e.target.value })}
+          />
+        </label>
+      </div>
+
+      <div>
+        <span className="sm:hidden block text-[10px] uppercase tracking-wide text-ink-soft">Qty</span>
+        <div className="flex items-center gap-1">
+          <input
+            type="number"
+            step="0.01"
+            className="input text-right"
+            value={item.qty}
+            onChange={(e) => onChange({ qty: Number(e.target.value) })}
+            title="Quantity"
+          />
+          <span className="text-xs text-ink-soft shrink-0">{item.unit}</span>
+        </div>
+      </div>
+
+      <div>
+        <span className="sm:hidden block text-[10px] uppercase tracking-wide text-ink-soft">Cost/unit</span>
+        <input
+          type="number"
+          step="0.01"
+          className="input text-right"
+          value={item.rate}
+          onChange={(e) => onChange({ rate: Number(e.target.value) })}
+          title="Cost per unit, before markup"
+        />
+      </div>
+
+      <div>
+        <span className="sm:hidden block text-[10px] uppercase tracking-wide text-ink-soft">Sell/unit</span>
+        <div className="input text-right bg-paper text-ink-soft" title="Cost/unit plus the quote's markup %">
+          ${money(sellRate)}
+        </div>
+      </div>
+
+      <div className="text-right">
+        <span className="sm:hidden block text-[10px] uppercase tracking-wide text-ink-soft text-left">Line total</span>
+        <span className="font-mono text-sm font-semibold">{item.poa ? "POA" : `$${money(lineTotal!)}`}</span>
+        <label className="flex items-center justify-end gap-1 text-xs text-ink-soft whitespace-nowrap mt-1">
+          <input type="checkbox" checked={item.poa} onChange={(e) => onChange({ poa: e.target.checked })} />
+          POA
+        </label>
+      </div>
+
+      <div className="flex sm:block justify-end">
+        <button onClick={onRemove} className="text-brick text-xs px-2 py-2" title="Remove item">
+          ✕
+        </button>
+      </div>
     </div>
   );
 }
