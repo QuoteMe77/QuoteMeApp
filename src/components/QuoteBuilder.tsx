@@ -299,6 +299,25 @@ export default function QuoteBuilder({
       .map((x) => x.p);
   }
 
+  // A handful of accessory items have an established "pick this unless told
+  // otherwise" default — the same pattern as defaulting to Merivo drawers
+  // when no brand is nominated — rather than making the estimator choose
+  // every time between several price-book options that only differ in size
+  // or a detail the drawing never specifies. Only applies when the drawing
+  // gives no more specific detail (a material_hint), since a called-out
+  // model should still be free to match itself normally.
+  function defaultAccessoryMatch(it: PlanItemResult): PriceBookItem | null {
+    if (it.material_hint.trim()) return null;
+    const name = it.name.toLowerCase();
+    if (/hamper/.test(name)) {
+      return priceBook.find((p) => p.name.toLowerCase().includes("finista edge uni-hamper 450")) || null;
+    }
+    if (/\bled\b/.test(name)) {
+      return priceBook.find((p) => p.name.toLowerCase().includes("led extrusion with diffuser rebated")) || null;
+    }
+    return null;
+  }
+
   const MATERIAL_STOPWORDS = new Set([
     "mm", "with", "and", "the", "including", "collection", "series", "range", "doors", "door", "panel",
     "from", "white", "cabinet", "base", "wall", "tall", "open",
@@ -498,7 +517,10 @@ export default function QuoteBuilder({
       const flags: Record<number, string> = {};
       (data.items as PlanItemResult[]).forEach((it, i) => {
         const options = materialOptionsFor(it);
-        const { match, exact } = bestMaterialMatch(options, `${it.name} ${it.material_hint}`);
+        const defaultMatch = defaultAccessoryMatch(it);
+        const { match, exact } = defaultMatch
+          ? { match: defaultMatch, exact: true }
+          : bestMaterialMatch(options, `${it.name} ${it.material_hint}`);
         if (match) defaults[i] = match.id;
         flags[i] = buildMaterialFlag(it, options, match, exact);
       });
