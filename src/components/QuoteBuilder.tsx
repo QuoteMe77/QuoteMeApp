@@ -280,6 +280,7 @@ export default function QuoteBuilder({
   // against the whole price book instead (excluding drawer-brand hardware,
   // which is matched separately via drawer_count/drawer_brand).
   function materialOptionsFor(it: PlanItemResult): PriceBookItem[] {
+    if (isNoPriceScopeItem(it)) return [];
     const prefix = categoryPrefixFor(it.cabinet_type);
     if (prefix) {
       return priceBook.filter(
@@ -315,7 +316,19 @@ export default function QuoteBuilder({
     if (/\bled\b/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("led extrusion with diffuser rebated")) || null;
     }
+    if (/hanging\s*rod|hanging\s*rail/.test(name)) {
+      return priceBook.find((p) => p.name.toLowerCase().includes("hanging rail in laundry")) || null;
+    }
     return null;
+  }
+
+  // Splashbacks, stone benchtops, and tap/mixer installation are scope the
+  // joinery shop coordinates and cuts for but doesn't supply or price itself
+  // — these should still land on the quote (so nothing is missed) but with
+  // no price expected, rather than being matched against the price book.
+  function isNoPriceScopeItem(it: PlanItemResult): boolean {
+    const text = `${it.name} ${it.material_hint}`.toLowerCase();
+    return /splash\s*back|stone\s*benchtop|benchtop.*stone|\bmixer\b|tap\s*install/.test(text);
   }
 
   const MATERIAL_STOPWORDS = new Set([
@@ -516,6 +529,10 @@ export default function QuoteBuilder({
       const defaults: Record<number, string> = {};
       const flags: Record<number, string> = {};
       (data.items as PlanItemResult[]).forEach((it, i) => {
+        if (isNoPriceScopeItem(it)) {
+          flags[i] = "Joinery scope only — no price needed (supplied/installed by others).";
+          return;
+        }
         const options = materialOptionsFor(it);
         const defaultMatch = defaultAccessoryMatch(it);
         const { match, exact } = defaultMatch
@@ -679,22 +696,31 @@ export default function QuoteBuilder({
 
     const newLines: LineItem[] = [];
     toAdd.forEach(({ it, i }) => {
+      const noPrice = isNoPriceScopeItem(it);
       const chosenId = planItemMaterial[i];
-      const chosen = chosenId ? priceBook.find((p) => p.id === chosenId) : null;
+      const chosen = !noPrice && chosenId ? priceBook.find((p) => p.id === chosenId) : null;
+      // Default-matched accessories (hamper, LED, hanging rod — see
+      // defaultAccessoryMatch) already have an unambiguous, plain-English
+      // name; dumping the price book's own wording into the note just
+      // duplicates it with clunkier phrasing ("1x hanging rail in laundry").
+      // Reserve the note for cases where the match itself is informative —
+      // a cabinet run's chosen finish, or a fuzzy-matched item where it's
+      // worth confirming exactly which price-book line was picked.
+      const isDefaultMatch = !noPrice && defaultAccessoryMatch(it) !== null;
 
       newLines.push({
         key: newKey(),
         price_book_item_id: chosen?.id ?? null,
         name: it.name,
-        category: chosen?.category ?? "From plan",
+        category: noPrice ? "Joinery scope (no price)" : chosen?.category ?? "From plan",
         calc: it.calc,
         unit: chosen?.unit ?? it.unit,
         rate: chosen ? Number(chosen.rate) : 0,
         qty: it.qty,
         area: it.room || "General",
-        note: chosen ? chosen.name : "",
+        note: chosen && !isDefaultMatch ? chosen.name : "",
         pdf_label: it.name,
-        poa: false,
+        poa: noPrice,
         flag_label: planItemFlag[i] ?? "",
       });
 
@@ -710,7 +736,7 @@ export default function QuoteBuilder({
           rate: hardware ? Number(hardware.rate) : 0,
           qty: it.drawer_count,
           area: it.room || "General",
-          note: `For: ${it.name}`,
+          note: it.cabinet_type === "tall" ? `TALL — For: ${it.name}` : `For: ${it.name}`,
           pdf_label: "",
           poa: false,
           flag_label: hardware ? "" : "Select drawer hardware",
