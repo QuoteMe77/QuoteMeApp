@@ -3,7 +3,12 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// Raised from 60s: extended thinking (added below) gives the model time to
+// reason through a multi-page plan before answering, which adds real
+// latency on top of what was already a slow vision+PDF call. If this
+// project is on Vercel's Hobby plan, 60s may be the hard ceiling regardless
+// of this setting — worth checking if reads start timing out.
+export const maxDuration = 120;
 
 const PLAN_PROMPT = `You are an experienced joinery estimator reviewing a construction document set (floor plans, elevations, joinery/cabinetry detail sheets, and — often within the same document — a finishes, fixtures & equipment (FFE) schedule or joinery finishes/hardware page) for a fit-out of any room type (kitchen, pantry, laundry, bathroom, wardrobe, and so on — don't assume kitchen). Read every page provided. The finishes schedule is the source of truth for materials/hardware — use it to resolve coded references (e.g. "L1", "PC1") and fill in finish/drawer brand even when nothing is tagged on the drawing itself — but never quote line items from the schedule directly; it only informs items found on the actual drawings.
 
@@ -174,7 +179,16 @@ export async function POST(request: NextRequest) {
   try {
     message = await anthropic.messages.create({
       model: "claude-sonnet-4-5",
-      max_tokens: 4096,
+      // Extended thinking gives the model room to work through the plan
+      // step by step — cross-checking one sheet against another, catching
+      // its own contradictions — before it commits to the final JSON,
+      // instead of having to produce a correct answer to a genuinely hard
+      // multi-page reading task in one immediate pass. max_tokens is raised
+      // to comfortably cover the thinking budget plus a full item list for
+      // a busy multi-room plan; thinking requires temperature 1 (the
+      // default here, left unset).
+      max_tokens: 12000,
+      thinking: { type: "enabled", budget_tokens: 6000 },
       messages: [
         {
           role: "user",
@@ -186,7 +200,7 @@ export async function POST(request: NextRequest) {
           content: content as never,
         },
       ],
-    });
+    } as never);
   } catch (err) {
     console.error("Anthropic plan-read call failed:", err);
     // Surface the actual reason in the response rather than a generic

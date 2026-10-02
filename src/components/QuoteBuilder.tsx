@@ -254,6 +254,13 @@ export default function QuoteBuilder({
     drawer_brand: string;
     note: string;
     confidence: string;
+    // Set by mergePlanBands, not the model — a deterministic, code-level
+    // check (not something we can trust the AI to police in itself) for the
+    // specific failure mode that kept recurring: the same physical wall
+    // reported more than once under different wording, which silently
+    // double-counts its length once summed. Undefined when nothing looked
+    // suspicious.
+    duplicate_wall_warning?: string;
   };
 
   const [planUploading, setPlanUploading] = useState(false);
@@ -483,6 +490,16 @@ export default function QuoteBuilder({
     const keyOf = (it: PlanItemResult) =>
       [it.room.trim().toLowerCase(), it.cabinet_type, it.open ? "open" : "closed"].join("|");
 
+    // Location keywords checked for repeats below — a real room essentially
+    // never has two walls both describable as "the front wall" or both as
+    // "the return wall", so if a merge group's notes mention the same one
+    // of these more than once, that's a strong, cheap, deterministic signal
+    // the model reported one physical wall twice under different wording
+    // (exactly the bug that caused the Pantry test's Base/Wall overcounts),
+    // rather than genuinely two different walls. This catches that pattern
+    // without needing to know the plan's real wall count.
+    const LOCATION_WORDS = ["front", "return", "rear", "back", "middle", "island"];
+
     const sums = new Map<
       string,
       {
@@ -536,6 +553,20 @@ export default function QuoteBuilder({
       emitted.add(key);
       const s = sums.get(key)!;
       const confidence = s.confidences.includes("low") ? "low" : s.confidences.includes("medium") ? "medium" : "high";
+
+      // Flag any location word that shows up in more than one of the
+      // distinct notes feeding this merged item — see LOCATION_WORDS above.
+      const repeatedWords = LOCATION_WORDS.filter((word) => {
+        const re = new RegExp(`\\b${word}\\b`, "i");
+        return s.notes.filter((n) => re.test(n)).length >= 2;
+      });
+      const duplicateWallWarning =
+        repeatedWords.length > 0
+          ? `Combined from ${s.notes.length} plan entries, and more than one mentions "${repeatedWords.join(
+              '" / "'
+            )}" — check this isn't the same wall counted twice before pricing.`
+          : undefined;
+
       merged.push({
         ...it,
         qty: Math.round(s.qty * 1000) / 1000,
@@ -545,6 +576,7 @@ export default function QuoteBuilder({
         material_hint: s.bestHint || it.material_hint,
         note: s.notes.join("; "),
         confidence,
+        duplicate_wall_warning: duplicateWallWarning,
       });
     }
     return merged;
@@ -1431,6 +1463,11 @@ export default function QuoteBuilder({
                               </span>
                             )}
                           </div>
+                          {it.duplicate_wall_warning && (
+                            <span className="block text-xs font-medium text-red-600 mt-0.5">
+                              ⚠ {it.duplicate_wall_warning}
+                            </span>
+                          )}
                           {planItemFlag[i] && <span className="block text-xs text-brick mt-0.5">⚠ {planItemFlag[i]}</span>}
                           {it.drawer_count > 0 && (
                             <span className="block text-xs text-ink-soft">
