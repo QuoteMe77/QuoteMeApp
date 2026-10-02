@@ -181,7 +181,7 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(13);
   doc.setTextColor(...inkColor);
-  doc.text("Total (lump sum)", totalsX, y);
+  doc.text("Total", totalsX, y);
   doc.text(`$${money(quote.total)}`, pageW - marginX, y, { align: "right" });
 
   return doc;

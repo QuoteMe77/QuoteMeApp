@@ -143,7 +143,7 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
       alignment: AlignmentType.RIGHT,
       spacing: { before: 160 },
       children: [
-        new TextRun({ text: "Total (lump sum): ", bold: true, size: 24 }),
+        new TextRun({ text: "Total: ", bold: true, size: 24 }),
         new TextRun({ text: `$${money(quote.total)}`, bold: true, size: 24 }),
       ],
     })
