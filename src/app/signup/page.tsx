@@ -97,13 +97,23 @@ export default function SignupPage() {
           <input
             required
             type="email"
+            name="email"
+            id="email"
+            autoComplete="username"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="input"
           />
         </Field>
         <Field label="Password">
-          <PasswordInput value={password} onChange={setPassword} minLength={8} autoComplete="new-password" />
+          <PasswordInput
+            value={password}
+            onChange={setPassword}
+            minLength={8}
+            autoComplete="new-password"
+            name="new-password"
+            id="new-password"
+          />
         </Field>
 
         {error && <p className="text-brick text-sm mb-4">{error}</p>}

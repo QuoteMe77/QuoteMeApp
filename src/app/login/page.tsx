@@ -54,6 +54,9 @@ function LoginForm() {
           <input
             required
             type="email"
+            name="email"
+            id="email"
+            autoComplete="username"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="input"
@@ -61,7 +64,13 @@ function LoginForm() {
         </label>
         <label className="block mb-1">
           <span className="block text-xs text-ink-soft mb-1 font-medium">Password</span>
-          <PasswordInput value={password} onChange={setPassword} autoComplete="current-password" />
+          <PasswordInput
+            value={password}
+            onChange={setPassword}
+            autoComplete="current-password"
+            name="current-password"
+            id="current-password"
+          />
         </label>
 
         {error && <p className="text-brick text-sm mb-4">{error}</p>}
