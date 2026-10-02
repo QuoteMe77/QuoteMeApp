@@ -122,25 +122,21 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     doc.text(area, marginX, y + 12);
     y += 18;
 
+    // This is a lump-sum quote: the client sees the full scope of work per
+    // area, but pricing is a single total at the bottom rather than a rate
+    // and line total next to every item — so the table lists what's
+    // included (and how much of it), not what each piece costs.
     autoTable(doc, {
       startY: y,
       margin: { left: marginX, right: marginX },
-      head: [["Item", "Qty", "Unit", "Rate", "Total"]],
-      body: rows.map((it) => [
-        it.note ? `${it.name}\n${it.note}` : it.name,
-        String(it.qty),
-        it.unit,
-        it.poa ? "POA" : `$${money(it.rate)}`,
-        it.poa ? "POA" : `$${money(it.qty * it.rate)}`,
-      ]),
+      head: [["Item", "Qty", "Unit"]],
+      body: rows.map((it) => [it.note ? `${it.name}\n${it.note}` : it.name, String(it.qty), it.unit]),
       styles: { fontSize: 9, textColor: inkColor, cellPadding: 5 },
       headStyles: { fillColor: [239, 234, 224], textColor: inkColor, fontStyle: "bold" },
       alternateRowStyles: { fillColor: [251, 248, 243] },
       columnStyles: {
-        1: { cellWidth: 40, halign: "right" },
-        2: { cellWidth: 50 },
-        3: { cellWidth: 70, halign: "right" },
-        4: { cellWidth: 70, halign: "right" },
+        1: { cellWidth: 50, halign: "right" },
+        2: { cellWidth: 60 },
       },
       didDrawPage: (data) => {
         y = data.cursor?.y ?? y;
@@ -170,7 +166,8 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     y += wrapped.length * 12 + 16;
   }
 
-  // Totals.
+  // Lump-sum total — no subtotal/markup breakdown on the client-facing
+  // quote, just the one figure for the whole job.
   if (y > 720) {
     doc.addPage();
     y = 48;
@@ -178,21 +175,11 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   const totalsX = pageW - marginX - 180;
   doc.setDrawColor(185, 172, 148);
   doc.line(totalsX, y, pageW - marginX, y);
-  y += 16;
-  doc.setFontSize(10);
-  doc.setTextColor(...softColor);
-  doc.text("Subtotal", totalsX, y);
-  doc.setTextColor(...inkColor);
-  doc.text(`$${money(quote.subtotal)}`, pageW - marginX, y, { align: "right" });
-  y += 16;
-  doc.setTextColor(...softColor);
-  doc.text(`Markup (${quote.markupPct}%)`, totalsX, y);
-  doc.setTextColor(...inkColor);
-  doc.text(`$${money(quote.markupAmount)}`, pageW - marginX, y, { align: "right" });
-  y += 18;
+  y += 20;
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.text("Total", totalsX, y);
+  doc.setFontSize(13);
+  doc.setTextColor(...inkColor);
+  doc.text("Total (lump sum)", totalsX, y);
   doc.text(`$${money(quote.total)}`, pageW - marginX, y, { align: "right" });
 
   return doc;

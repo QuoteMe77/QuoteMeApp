@@ -250,6 +250,7 @@ export default function QuoteBuilder({
     unit: string;
     material_hint: string;
     drawer_count: number;
+    pto_drawer_count: number;
     drawer_brand: string;
     note: string;
     confidence: string;
@@ -308,16 +309,20 @@ export default function QuoteBuilder({
   // gives no more specific detail (a material_hint), since a called-out
   // model should still be free to match itself normally.
   function defaultAccessoryMatch(it: PlanItemResult): PriceBookItem | null {
-    if (it.material_hint.trim()) return null;
     const name = it.name.toLowerCase();
+    // A hanging rod only ever has one price-book line regardless of colour
+    // or finish — "Black hanging rod" is still just a hanging rod — so this
+    // one ignores material_hint entirely rather than only applying when the
+    // schedule gave no extra detail.
+    if (/hanging\s*rod|hanging\s*rail/.test(name)) {
+      return priceBook.find((p) => p.name.toLowerCase().includes("hanging rail in laundry")) || null;
+    }
+    if (it.material_hint.trim()) return null;
     if (/hamper/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("finista edge uni-hamper 450")) || null;
     }
     if (/\bled\b/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("led extrusion with diffuser rebated")) || null;
-    }
-    if (/hanging\s*rod|hanging\s*rail/.test(name)) {
-      return priceBook.find((p) => p.name.toLowerCase().includes("hanging rail in laundry")) || null;
     }
     return null;
   }
@@ -391,14 +396,19 @@ export default function QuoteBuilder({
     movento: "movento",
   };
 
-  function findDrawerHardware(brand: string): PriceBookItem | null {
+  // forcePto, when given, overrides whatever the brand text says — used when
+  // splitting a mixed run into its standard and push-to-open portions, where
+  // each portion's mechanism is already known from pto_drawer_count rather
+  // than needing to be parsed back out of the brand string.
+  function findDrawerHardware(brand: string, forcePto?: boolean): PriceBookItem | null {
     const raw = (brand.trim() || "Merivo").toLowerCase();
     const tokens = raw.split(/[^a-z0-9]+/).filter(Boolean);
     // "PTO" (push-to-open — no handle, opened by pressing the door/front) is
     // a mechanism choice noted alongside the brand code, not a brand itself
     // — e.g. "ANT PTO" — so it's pulled out separately rather than treated
     // as part of the brand text.
-    const isPushToOpen = tokens.includes("pto") || raw.includes("push to open") || raw.includes("push-to-open");
+    const isPushToOpen =
+      forcePto ?? (tokens.includes("pto") || raw.includes("push to open") || raw.includes("push-to-open"));
     // Keep both the original tokens and their alias resolutions so a
     // substring check below matches regardless of which spelling/code the
     // drawing used versus which spelling the price book uses.
@@ -725,22 +735,51 @@ export default function QuoteBuilder({
       });
 
       if (it.drawer_count > 0) {
-        const hardware = findDrawerHardware(it.drawer_brand);
-        newLines.push({
-          key: newKey(),
-          price_book_item_id: hardware?.id ?? null,
-          name: hardware ? hardware.name : `Drawers — ${it.drawer_brand || "Merivo"} (not in price book)`,
-          category: "Hardware",
-          calc: "QTY",
-          unit: hardware?.unit ?? "ea",
-          rate: hardware ? Number(hardware.rate) : 0,
-          qty: it.drawer_count,
-          area: it.room || "General",
-          note: it.cabinet_type === "tall" ? `TALL — For: ${it.name}` : `For: ${it.name}`,
-          pdf_label: "",
-          poa: false,
-          flag_label: hardware ? "" : "Select drawer hardware",
-        });
+        const ptoCount = Math.min(it.pto_drawer_count || 0, it.drawer_count);
+        const standardCount = it.drawer_count - ptoCount;
+        // A base-run drawer bank doesn't need "For: Base cabinet run"
+        // restating the obvious — only the tall case is worth flagging,
+        // since that's the detail an installer needs at a glance.
+        const tallNote = it.cabinet_type === "tall" ? "TALL" : "";
+
+        if (standardCount > 0) {
+          const hardware = findDrawerHardware(it.drawer_brand, false);
+          newLines.push({
+            key: newKey(),
+            price_book_item_id: hardware?.id ?? null,
+            name: hardware ? hardware.name : `Drawers — ${it.drawer_brand || "Merivo"} (not in price book)`,
+            category: "Hardware",
+            calc: "QTY",
+            unit: hardware?.unit ?? "ea",
+            rate: hardware ? Number(hardware.rate) : 0,
+            qty: standardCount,
+            area: it.room || "General",
+            note: tallNote,
+            pdf_label: "",
+            poa: false,
+            flag_label: hardware ? "" : "Select drawer hardware",
+          });
+        }
+        if (ptoCount > 0) {
+          const ptoHardware = findDrawerHardware(it.drawer_brand, true);
+          newLines.push({
+            key: newKey(),
+            price_book_item_id: ptoHardware?.id ?? null,
+            name: ptoHardware
+              ? `${ptoHardware.name} (Push to Open)`
+              : `Drawers — ${it.drawer_brand || "Merivo"} Push to Open (not in price book)`,
+            category: "Hardware",
+            calc: "QTY",
+            unit: ptoHardware?.unit ?? "ea",
+            rate: ptoHardware ? Number(ptoHardware.rate) : 0,
+            qty: ptoCount,
+            area: it.room || "General",
+            note: tallNote,
+            pdf_label: "",
+            poa: false,
+            flag_label: ptoHardware ? "" : "Select drawer hardware",
+          });
+        }
       }
     });
 
@@ -1193,7 +1232,12 @@ export default function QuoteBuilder({
                             <span className="font-medium">{it.name}</span>
                             <span className="text-ink-soft">
                               — {it.room} · {it.qty} {it.unit}
-                              {it.drawer_count > 0 && ` · ${it.drawer_count} drawers`}
+                              {it.drawer_count > 0 &&
+                                ` · ${it.drawer_count} drawers${
+                                  it.pto_drawer_count > 0
+                                    ? ` (${it.drawer_count - it.pto_drawer_count} standard + ${it.pto_drawer_count} PTO)`
+                                    : ""
+                                }`}
                             </span>
                           </div>
                           {planItemFlag[i] && <span className="block text-xs text-brick mt-0.5">⚠ {planItemFlag[i]}</span>}

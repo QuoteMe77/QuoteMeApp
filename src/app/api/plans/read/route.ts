@@ -21,14 +21,19 @@ Use dimensions, run lengths, item tags/callouts (e.g. "B1", "W3", "PC1"), and ro
 For each distinct item, return:
 - "room": the room or area name it belongs to (e.g. "Kitchen", "Ensuite", "Laundry"). Use "General" if unclear.
 - "name": a short, specific description (e.g. "Base cabinet run", "Tall pantry cabinet", "Wall cabinet with shelf", "Laundry chute", "Hanging rod")
-- "cabinet_type": one of "base", "wall", "tall", or "other" — "other" for anything that isn't a standard base/wall/tall cabinet run (a benchtop, panel, vanity top, shelf, laundry fitting, lighting, hardware call-out, etc.). Classify by whether the section is actually an enclosed, full-height cupboard with its own doors running floor-to-ceiling (that's "tall" — e.g. an ironing-board cupboard, a pantry, a chute housing) versus a floor-level drawer/cabinet section that simply has open shelving, a hanging rod, or another unenclosed void above it rather than its own doors (that's still "base", even though it physically reaches the ceiling) — height alone doesn't make something "tall"; whether it's a self-contained door-fronted cupboard does.
+- "cabinet_type": one of "base", "wall", "tall", or "other" — "other" for anything that isn't a standard base/wall/tall cabinet run (a benchtop, panel, vanity top, shelf, laundry fitting, lighting, hardware call-out, etc.). Classify by vertical position and structure, not by overall height:
+  - "base": a cabinet standing on the floor, roughly 0–900mm high (drawers, cupboards, open shelving at that height) — this applies even when there's something else mounted on the wall directly above it (open shelving, a hanging-rod void, or a separate wall cabinet), because that's a second, separate item, not part of the base item's height.
+  - "wall": a cabinet mounted on the wall above bench height, independent of whatever is below it on the same wall.
+  - "tall": reserved for a single run that is genuinely ONE continuous cabinet carcase, floor-to-ceiling, with no break at bench height (a pantry, a broom/ironing-board cupboard, a chute housing) — not a base cabinet that merely happens to have open shelving, a hanging rod, or a wall cabinet above it on the same wall.
+  A single wall section very often produces TWO items this way — a base item for its 0–900mm component and a wall item for whatever sits above it (open shelving or its own wall cabinet) — rather than one item. Report both; don't fold the upper portion's scope into the base item or drop it because it's "the same wall".
 - "open": true if this run is called up as open/shelving (no doors), false otherwise
 - "calc": one of "LM" (priced per linear metre — use for cabinet runs, benchtops, panelling), "QTY" (priced per unit — use for discrete items like a single vanity, end panel, chute, hamper, rod, or light fitting), or "MISC" (anything that doesn't fit either)
 - "qty": your best-estimate quantity as a plain number (linear metres for LM, count for QTY)
 - "unit": a short unit label matching the calc type (e.g. "lm", "ea")
 - "material_hint": the finish resolved from the drawing or finishes schedule, written out as fully as it's described there — door/panel material, thickness, profile (e.g. "Shaker", "Farmers", "Flat panel"), manufacturer/range, and colour, in whatever combination is actually stated (e.g. "22mm Farmers Doors Weathered Slimline Oak Stained", "18mm Polytec Boston Oak Range", "Polytec Woodmatt"). For a non-cabinet item this is whatever distinguishing detail is given (size, colour, model) rather than a cabinet finish. Carry over every descriptive word the schedule or drawing gives you — this gets matched against a price book by those exact words, so a vague hint ("timber") matches far worse than the full description ("19mm American Oak Veneer G1S Clear Polyurethane"). Leave it an empty string only if truly nothing is stated anywhere — never invent one.
-- "drawer_count": the number of drawers in this run as a plain number, 0 if none. If the run has a mixed configuration (e.g. 8 standard-opening drawers and 2 push-to-open drawers), put the total count here and spell out the split in "note" instead — the drawer_count/drawer_brand fields can only describe one uniform style per item.
-- "drawer_brand": the drawer system/brand nominated for this item, exactly as written on the drawing or schedule — including if it's a short code or abbreviation rather than a full name (e.g. "ANT", "MER", "LEG", "MOV"), and including a push-to-open notation if one applies to the whole run (e.g. "ANT PTO") — leave it as that literal code/text rather than expanding or guessing what it stands for. Empty string if none is stated.
+- "drawer_count": the TOTAL number of drawers in this run — standard-opening plus push-to-open combined — as a plain number, 0 if none.
+- "pto_drawer_count": how many of those drawers (out of drawer_count) are push-to-open (no handle, opened by pressing the drawer front) rather than standard-opening — a plain number, 0 if none/all standard. A run can be entirely push-to-open (pto_drawer_count equal to drawer_count), entirely standard (0), or a mix of both.
+- "drawer_brand": the drawer system/brand nominated for this item, exactly as written on the drawing or schedule — including if it's a short code or abbreviation rather than a full name (e.g. "ANT", "MER", "LEG", "MOV") — leave it as that literal code/text rather than expanding or guessing what it stands for. Empty string if none is stated.
 - "note": any other relevant detail worth carrying onto a quote line (height, specific hardware called up, a tag reference, which wall/run this is, a mixed drawer-style split) — keep it brief, or an empty string if nothing extra is needed
 - "confidence": "high", "medium", or "low" — how confident you are in this item and its quantity from what's actually legible on the drawing
 
@@ -36,7 +41,7 @@ Also include a top-level "flags" array of short strings for anything an estimato
 
 Respond with ONLY a JSON object of this exact shape, no other text:
 {
-  "items": [ { "room": "...", "name": "...", "cabinet_type": "base", "open": false, "calc": "LM", "qty": 0, "unit": "lm", "material_hint": "", "drawer_count": 0, "drawer_brand": "", "note": "...", "confidence": "medium" } ],
+  "items": [ { "room": "...", "name": "...", "cabinet_type": "base", "open": false, "calc": "LM", "qty": 0, "unit": "lm", "material_hint": "", "drawer_count": 0, "pto_drawer_count": 0, "drawer_brand": "", "note": "...", "confidence": "medium" } ],
   "flags": [ "..." ]
 }`;
 
@@ -50,6 +55,7 @@ type PlanItem = {
   unit: string;
   material_hint: string;
   drawer_count: number;
+  pto_drawer_count: number;
   drawer_brand: string;
   note: string;
   confidence: "high" | "medium" | "low";

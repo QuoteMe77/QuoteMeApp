@@ -77,8 +77,11 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
     );
   });
 
+  // This is a lump-sum quote: the client sees the full scope of work per
+  // area, but pricing is a single total at the bottom rather than a rate
+  // and line total next to every item.
   const areas = Array.from(new Set(quote.items.map((it) => it.area || "General")));
-  const colWidths = [4500, 1200, 1200, 1500, 1500]; // sums to 9900 DXA
+  const colWidths = [6900, 1500, 1500]; // sums to 9900 DXA
 
   areas.forEach((area) => {
     const rows = quote.items.filter((it) => (it.area || "General") === area);
@@ -94,13 +97,7 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
 
     const tableRows: TableRow[] = [
       new TableRow({
-        children: [
-          headerCell("Item", colWidths[0]),
-          headerCell("Qty", colWidths[1]),
-          headerCell("Unit", colWidths[2]),
-          headerCell("Rate", colWidths[3]),
-          headerCell("Total", colWidths[4]),
-        ],
+        children: [headerCell("Item", colWidths[0]), headerCell("Qty", colWidths[1]), headerCell("Unit", colWidths[2])],
       }),
       ...rows.map(
         (it) =>
@@ -109,8 +106,6 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
               bodyCell(it.note ? `${it.name} — ${it.note}` : it.name, colWidths[0]),
               bodyCell(String(it.qty), colWidths[1], AlignmentType.RIGHT),
               bodyCell(it.unit, colWidths[2]),
-              bodyCell(it.poa ? "POA" : `$${money(it.rate)}`, colWidths[3], AlignmentType.RIGHT),
-              bodyCell(it.poa ? "POA" : `$${money(it.qty * it.rate)}`, colWidths[4], AlignmentType.RIGHT),
             ],
           })
       ),
@@ -142,24 +137,9 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
     new Paragraph({ spacing: { before: 300 }, border: { top: { style: "single", size: 6, color: "B9AC94" } }, children: [] }),
     new Paragraph({
       alignment: AlignmentType.RIGHT,
-      spacing: { before: 120 },
+      spacing: { before: 160 },
       children: [
-        new TextRun({ text: "Subtotal: ", color: "6B6053", size: 18 }),
-        new TextRun({ text: `$${money(quote.subtotal)}`, size: 18 }),
-      ],
-    }),
-    new Paragraph({
-      alignment: AlignmentType.RIGHT,
-      children: [
-        new TextRun({ text: `Markup (${quote.markupPct}%): `, color: "6B6053", size: 18 }),
-        new TextRun({ text: `$${money(quote.markupAmount)}`, size: 18 }),
-      ],
-    }),
-    new Paragraph({
-      alignment: AlignmentType.RIGHT,
-      spacing: { before: 120 },
-      children: [
-        new TextRun({ text: "Total: ", bold: true, size: 24 }),
+        new TextRun({ text: "Total (lump sum): ", bold: true, size: 24 }),
         new TextRun({ text: `$${money(quote.total)}`, bold: true, size: 24 }),
       ],
     })
