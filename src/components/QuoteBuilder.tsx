@@ -456,6 +456,69 @@ export default function QuoteBuilder({
     return `${userId}/${Date.now()}-${safeName}`;
   }
 
+  // The model is asked (see PLAN_PROMPT) to report each wall's own
+  // base/wall/tall band as its own atomic item, rather than attempting to
+  // sum lengths/drawer counts across walls itself — it kept failing to hold
+  // that arithmetic consistently across several simultaneous rules. Instead,
+  // matching bands from different walls (same room, cabinet type, open/
+  // closed, finish, and drawer brand) are summed here, deterministically,
+  // right after the raw read comes back and before anything downstream
+  // (selection, material matching, defaults) ever sees the un-merged items.
+  // Discrete fittings/QTY/MISC items are left alone — those are already
+  // meant to be one item per instance, not one per wall.
+  function mergePlanBands(items: PlanItemResult[]): PlanItemResult[] {
+    const mergeable = (it: PlanItemResult) =>
+      it.calc === "LM" && (it.cabinet_type === "base" || it.cabinet_type === "wall" || it.cabinet_type === "tall");
+    const keyOf = (it: PlanItemResult) =>
+      [
+        it.room.trim().toLowerCase(),
+        it.cabinet_type,
+        it.open ? "open" : "closed",
+        materialKeywords(it.material_hint).sort().join(" "),
+        it.drawer_brand.trim().toLowerCase(),
+      ].join("|");
+
+    const sums = new Map<
+      string,
+      { qty: number; drawer_count: number; pto_drawer_count: number; notes: string[]; confidences: string[] }
+    >();
+    for (const it of items) {
+      if (!mergeable(it)) continue;
+      const key = keyOf(it);
+      const s = sums.get(key) || { qty: 0, drawer_count: 0, pto_drawer_count: 0, notes: [] as string[], confidences: [] as string[] };
+      s.qty += it.qty || 0;
+      s.drawer_count += it.drawer_count || 0;
+      s.pto_drawer_count += it.pto_drawer_count || 0;
+      const note = it.note.trim();
+      if (note && !s.notes.includes(note)) s.notes.push(note);
+      s.confidences.push(it.confidence);
+      sums.set(key, s);
+    }
+
+    const emitted = new Set<string>();
+    const merged: PlanItemResult[] = [];
+    for (const it of items) {
+      if (!mergeable(it)) {
+        merged.push(it);
+        continue;
+      }
+      const key = keyOf(it);
+      if (emitted.has(key)) continue; // later walls' figures are folded into the first occurrence below
+      emitted.add(key);
+      const s = sums.get(key)!;
+      const confidence = s.confidences.includes("low") ? "low" : s.confidences.includes("medium") ? "medium" : "high";
+      merged.push({
+        ...it,
+        qty: Math.round(s.qty * 1000) / 1000,
+        drawer_count: s.drawer_count,
+        pto_drawer_count: s.pto_drawer_count,
+        note: s.notes.join("; "),
+        confidence,
+      });
+    }
+    return merged;
+  }
+
   type PdfPicker = {
     target: "plan" | "schedule";
     file: File;
@@ -533,6 +596,12 @@ export default function QuoteBuilder({
       if (!res.ok) {
         setPlanError(data.error || "Could not read this plan.");
         return;
+      }
+      // Combine matching base/wall/tall bands from different walls here —
+      // see mergePlanBands for why this is done in code rather than asking
+      // the model to do the cross-wall arithmetic itself.
+      if (Array.isArray(data.items)) {
+        data.items = mergePlanBands(data.items as PlanItemResult[]);
       }
       setPlanResult(data);
       // Only fill these in when the estimator hasn't already typed something
