@@ -809,6 +809,28 @@ export default function QuoteBuilder({
       .map((it, i) => ({ it, i }))
       .filter(({ i }) => selectedPlanItems.has(i));
 
+    // A job-wide item (the combined "by others" exclusion line, or anything
+    // else the model couldn't tie to one room) comes back with room
+    // "General" or blank — which used to land it in its own separate
+    // "General" section on the quote, away from the room it actually
+    // belongs with. When this batch is really just one room's worth of
+    // items (the normal case — one plan read, one room), fall back to that
+    // room instead, so every item added from this read lands in the same
+    // section rather than splitting off a stray "General" heading.
+    const roomCounts = new Map<string, number>();
+    toAdd.forEach(({ it }) => {
+      const room = it.room?.trim();
+      if (room && room !== "General") roomCounts.set(room, (roomCounts.get(room) || 0) + 1);
+    });
+    let dominantRoom: string | null = null;
+    roomCounts.forEach((count, room) => {
+      if (!dominantRoom || count > (roomCounts.get(dominantRoom) || 0)) dominantRoom = room;
+    });
+    const areaFor = (it: PlanItemResult) => {
+      const room = it.room?.trim();
+      return room && room !== "General" ? room : dominantRoom || "General";
+    };
+
     const newLines: LineItem[] = [];
     toAdd.forEach(({ it, i }) => {
       const noPrice = isNoPriceScopeItem(it);
@@ -832,7 +854,7 @@ export default function QuoteBuilder({
         unit: chosen?.unit ?? it.unit,
         rate: chosen ? Number(chosen.rate) : 0,
         qty: it.qty,
-        area: it.room || "General",
+        area: areaFor(it),
         note: chosen && !isDefaultMatch ? chosen.name : "",
         pdf_label: it.name,
         poa: noPrice,
@@ -858,7 +880,7 @@ export default function QuoteBuilder({
             unit: hardware?.unit ?? "ea",
             rate: hardware ? Number(hardware.rate) : 0,
             qty: standardCount,
-            area: it.room || "General",
+            area: areaFor(it),
             note: tallNote,
             pdf_label: "",
             poa: false,
@@ -878,7 +900,7 @@ export default function QuoteBuilder({
             unit: ptoHardware?.unit ?? "ea",
             rate: ptoHardware ? Number(ptoHardware.rate) : 0,
             qty: ptoCount,
-            area: it.room || "General",
+            area: areaFor(it),
             note: tallNote,
             pdf_label: "",
             poa: false,
