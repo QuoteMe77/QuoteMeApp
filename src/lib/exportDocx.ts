@@ -8,6 +8,7 @@ import {
   Table,
   TableCell,
   TableRow,
+  TabStopType,
   TextRun,
   WidthType,
 } from "docx";
@@ -78,9 +79,10 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
   });
 
   // This is a lump-sum quote: the client sees the full scope of work per
-  // area, with pricing as a single total at the bottom — so each line is
-  // just a plain description of what's included, with no quantity, rate,
-  // or linear-metre figure attached.
+  // area, with that area's own total on its heading line — so a multi-room
+  // quote shows what each room costs, not just one figure for the whole job
+  // at the very end. Each line below is just a plain description of what's
+  // included, with no quantity, rate, or linear-metre figure attached.
   const areas = Array.from(new Set(quote.items.map((it) => it.area || "General")));
   const colWidths = [9900]; // full table width, single column
 
@@ -88,11 +90,18 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
     const rows = quote.items.filter((it) => (it.area || "General") === area);
     if (rows.length === 0) return;
 
+    const areaSubtotal = rows.reduce((sum, it) => (it.poa ? sum : sum + it.qty * it.rate), 0);
+    const areaTotal = areaSubtotal * (1 + quote.markupPct / 100);
+
     children.push(
       new Paragraph({
         heading: HeadingLevel.HEADING_3,
         spacing: { before: 300, after: 120 },
-        children: [new TextRun({ text: area, bold: true, color: "9C6B2E", size: 22 })],
+        tabStops: [{ type: TabStopType.RIGHT, position: 9900 }],
+        children: [
+          new TextRun({ text: area, bold: true, color: "9C6B2E", size: 22 }),
+          new TextRun({ text: `\t$${money(areaTotal)}`, bold: true, color: "9C6B2E", size: 22 }),
+        ],
       })
     );
 

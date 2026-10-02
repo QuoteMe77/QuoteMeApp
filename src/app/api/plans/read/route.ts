@@ -29,7 +29,7 @@ Use dimensions, run lengths, item tags/callouts (e.g. "B1", "W3", "PC1"), and ro
 
 For each distinct item, return:
 - "room": the room or area name it belongs to (e.g. "Kitchen", "Ensuite", "Laundry"). Use "General" if unclear.
-- "name": a short, specific description (e.g. "Base cabinet run", "Tall pantry cabinet", "Wall cabinet with shelf", "Laundry chute", "Hanging rod")
+- "name": a short, specific description — never use the word "run" (e.g. "Base cabinet", "Tall pantry cabinet", "Wall cabinet with shelf", "Laundry chute", "Hanging rod")
 - "cabinet_type": one of "base", "wall", "tall", or "other" — "other" for anything that isn't a standard base/wall/tall cabinet run (a benchtop, panel, vanity top, shelf, laundry fitting, lighting, hardware call-out, etc.).
 
   Work out cabinet_type BEFORE deciding whether runs combine — classify every wall's elevation one vertical band at a time, from the floor up, rather than looking at a wall as a whole and picking one type for everything on it:

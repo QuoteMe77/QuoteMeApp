@@ -110,16 +110,22 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   y = Math.max(leftY, rightY) + 6;
 
   // Line items, grouped by area, one autoTable per area so each room gets
-  // its own heading row.
+  // its own heading row — with that area's own lump-sum total on the same
+  // line, so a multi-room quote shows what each room costs, not just the
+  // one figure for the whole job at the very end.
   const areas = Array.from(new Set(quote.items.map((it) => it.area || "General")));
   areas.forEach((area) => {
     const rows = quote.items.filter((it) => (it.area || "General") === area);
     if (rows.length === 0) return;
 
+    const areaSubtotal = rows.reduce((sum, it) => (it.poa ? sum : sum + it.qty * it.rate), 0);
+    const areaTotal = areaSubtotal * (1 + quote.markupPct / 100);
+
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10.5);
     doc.setTextColor(...brassColor);
     doc.text(area, marginX, y + 12);
+    doc.text(`$${money(areaTotal)}`, pageW - marginX, y + 12, { align: "right" });
     y += 18;
 
     // This is a lump-sum quote: the client sees the full scope of work
