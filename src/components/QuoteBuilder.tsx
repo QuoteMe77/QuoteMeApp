@@ -460,41 +460,55 @@ export default function QuoteBuilder({
   // base/wall/tall band as its own atomic item, rather than attempting to
   // sum lengths/drawer counts across walls itself — it kept failing to hold
   // that arithmetic consistently across several simultaneous rules. Instead,
-  // matching bands from different walls (same room, cabinet type, open/
-  // closed, finish) are summed here, deterministically, right after the raw
-  // read comes back and before anything downstream (selection, material
+  // matching bands from different walls (same room, cabinet type, and open/
+  // closed) are summed here, deterministically, right after the raw read
+  // comes back and before anything downstream (selection, material
   // matching, defaults) ever sees the un-merged items. Discrete fittings/
   // QTY/MISC items are left alone — those are already meant to be one item
   // per instance, not one per wall.
   //
-  // Drawer brand is deliberately NOT part of the grouping key: a single
-  // wall's run can itself mix drawer brands/codes along its length (e.g. a
-  // hamper section on "ANT M" next to a plain drawer section on "ANT D"),
-  // and the prompt asks the model to keep that as one item per wall already
-  // — grouping on brand text here would only re-split items the model was
-  // told to keep together, since the brand string may be phrased slightly
-  // differently from wall to wall even when the finish genuinely matches.
+  // Neither drawer brand nor material_hint is part of the grouping key: a
+  // room's base/wall/tall cabinetry is overwhelmingly one finish throughout
+  // (per PLAN_PROMPT's own instruction to the model), but the model doesn't
+  // always phrase that finish identically for every wall it reads, and an
+  // estimator wants ONE base/wall/tall line per room with one material
+  // picker, not a second line every time the wording drifts. So every
+  // base/wall/tall item in the same room (of the same cabinet_type and
+  // open/closed) is combined into one, and the most complete material_hint
+  // and all distinct drawer brands seen are carried onto that one merged
+  // item instead.
   function mergePlanBands(items: PlanItemResult[]): PlanItemResult[] {
     const mergeable = (it: PlanItemResult) =>
       it.calc === "LM" && (it.cabinet_type === "base" || it.cabinet_type === "wall" || it.cabinet_type === "tall");
     const keyOf = (it: PlanItemResult) =>
-      [
-        it.room.trim().toLowerCase(),
-        it.cabinet_type,
-        it.open ? "open" : "closed",
-        materialKeywords(it.material_hint).sort().join(" "),
-      ].join("|");
+      [it.room.trim().toLowerCase(), it.cabinet_type, it.open ? "open" : "closed"].join("|");
 
     const sums = new Map<
       string,
-      { qty: number; drawer_count: number; pto_drawer_count: number; notes: string[]; confidences: string[]; brands: string[] }
+      {
+        qty: number;
+        drawer_count: number;
+        pto_drawer_count: number;
+        notes: string[];
+        confidences: string[];
+        brands: string[];
+        bestHint: string;
+      }
     >();
     for (const it of items) {
       if (!mergeable(it)) continue;
       const key = keyOf(it);
       const s =
         sums.get(key) ||
-        { qty: 0, drawer_count: 0, pto_drawer_count: 0, notes: [] as string[], confidences: [] as string[], brands: [] as string[] };
+        {
+          qty: 0,
+          drawer_count: 0,
+          pto_drawer_count: 0,
+          notes: [] as string[],
+          confidences: [] as string[],
+          brands: [] as string[],
+          bestHint: "",
+        };
       s.qty += it.qty || 0;
       s.drawer_count += it.drawer_count || 0;
       s.pto_drawer_count += it.pto_drawer_count || 0;
@@ -503,6 +517,10 @@ export default function QuoteBuilder({
       s.confidences.push(it.confidence);
       const brand = it.drawer_brand.trim();
       if (brand && !s.brands.some((b) => b.toLowerCase() === brand.toLowerCase())) s.brands.push(brand);
+      // The most detailed (longest) material_hint across the room's
+      // same-type items wins — a wall that got its finish fully described
+      // shouldn't lose to a wall where the model only wrote a few words.
+      if (it.material_hint.trim().length > s.bestHint.length) s.bestHint = it.material_hint.trim();
       sums.set(key, s);
     }
 
@@ -524,6 +542,7 @@ export default function QuoteBuilder({
         drawer_count: s.drawer_count,
         pto_drawer_count: s.pto_drawer_count,
         drawer_brand: s.brands.join(" / ") || it.drawer_brand,
+        material_hint: s.bestHint || it.material_hint,
         note: s.notes.join("; "),
         confidence,
       });
