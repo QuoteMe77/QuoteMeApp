@@ -461,11 +461,19 @@ export default function QuoteBuilder({
   // sum lengths/drawer counts across walls itself — it kept failing to hold
   // that arithmetic consistently across several simultaneous rules. Instead,
   // matching bands from different walls (same room, cabinet type, open/
-  // closed, finish, and drawer brand) are summed here, deterministically,
-  // right after the raw read comes back and before anything downstream
-  // (selection, material matching, defaults) ever sees the un-merged items.
-  // Discrete fittings/QTY/MISC items are left alone — those are already
-  // meant to be one item per instance, not one per wall.
+  // closed, finish) are summed here, deterministically, right after the raw
+  // read comes back and before anything downstream (selection, material
+  // matching, defaults) ever sees the un-merged items. Discrete fittings/
+  // QTY/MISC items are left alone — those are already meant to be one item
+  // per instance, not one per wall.
+  //
+  // Drawer brand is deliberately NOT part of the grouping key: a single
+  // wall's run can itself mix drawer brands/codes along its length (e.g. a
+  // hamper section on "ANT M" next to a plain drawer section on "ANT D"),
+  // and the prompt asks the model to keep that as one item per wall already
+  // — grouping on brand text here would only re-split items the model was
+  // told to keep together, since the brand string may be phrased slightly
+  // differently from wall to wall even when the finish genuinely matches.
   function mergePlanBands(items: PlanItemResult[]): PlanItemResult[] {
     const mergeable = (it: PlanItemResult) =>
       it.calc === "LM" && (it.cabinet_type === "base" || it.cabinet_type === "wall" || it.cabinet_type === "tall");
@@ -475,23 +483,26 @@ export default function QuoteBuilder({
         it.cabinet_type,
         it.open ? "open" : "closed",
         materialKeywords(it.material_hint).sort().join(" "),
-        it.drawer_brand.trim().toLowerCase(),
       ].join("|");
 
     const sums = new Map<
       string,
-      { qty: number; drawer_count: number; pto_drawer_count: number; notes: string[]; confidences: string[] }
+      { qty: number; drawer_count: number; pto_drawer_count: number; notes: string[]; confidences: string[]; brands: string[] }
     >();
     for (const it of items) {
       if (!mergeable(it)) continue;
       const key = keyOf(it);
-      const s = sums.get(key) || { qty: 0, drawer_count: 0, pto_drawer_count: 0, notes: [] as string[], confidences: [] as string[] };
+      const s =
+        sums.get(key) ||
+        { qty: 0, drawer_count: 0, pto_drawer_count: 0, notes: [] as string[], confidences: [] as string[], brands: [] as string[] };
       s.qty += it.qty || 0;
       s.drawer_count += it.drawer_count || 0;
       s.pto_drawer_count += it.pto_drawer_count || 0;
       const note = it.note.trim();
       if (note && !s.notes.includes(note)) s.notes.push(note);
       s.confidences.push(it.confidence);
+      const brand = it.drawer_brand.trim();
+      if (brand && !s.brands.some((b) => b.toLowerCase() === brand.toLowerCase())) s.brands.push(brand);
       sums.set(key, s);
     }
 
@@ -512,6 +523,7 @@ export default function QuoteBuilder({
         qty: Math.round(s.qty * 1000) / 1000,
         drawer_count: s.drawer_count,
         pto_drawer_count: s.pto_drawer_count,
+        drawer_brand: s.brands.join(" / ") || it.drawer_brand,
         note: s.notes.join("; "),
         confidence,
       });
