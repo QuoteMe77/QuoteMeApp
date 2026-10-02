@@ -640,6 +640,22 @@ export default function QuoteBuilder({
       // the quote.
       if (data.client_name && !clientName.trim()) setClientName(data.client_name);
       if (data.job_address && !jobAddress.trim()) setJobAddress(data.job_address);
+      // Default the active area to this plan's own room too, so a manual
+      // price-book add made after this read (an end panel the model missed,
+      // say) lands in the same section as everything else from this plan
+      // instead of defaulting into a separate "General" one.
+      if (activeArea === "General") {
+        const roomCounts = new Map<string, number>();
+        (data.items as PlanItemResult[]).forEach((it) => {
+          const room = it.room?.trim();
+          if (room && room !== "General") roomCounts.set(room, (roomCounts.get(room) || 0) + 1);
+        });
+        let topRoom: string | null = null;
+        roomCounts.forEach((count, room) => {
+          if (!topRoom || count > (roomCounts.get(topRoom) || 0)) topRoom = room;
+        });
+        if (topRoom) setActiveArea(topRoom);
+      }
       setSelectedPlanItems(new Set(data.items.map((_: unknown, i: number) => i)));
       const defaults: Record<number, string> = {};
       const flags: Record<number, string> = {};
@@ -803,6 +819,20 @@ export default function QuoteBuilder({
     setPdfPicker(null);
   }
 
+  // The AI read gets an estimator very close on a tricky multi-wall plan,
+  // but a vision read of a complex drawing will occasionally land a few
+  // percent off on one wall's length or drawer count — letting the
+  // estimator fix that number here, in five seconds, beats chasing it
+  // through another re-upload (or trusting a number that's slightly off).
+  function updatePlanItem(i: number, patch: Partial<PlanItemResult>) {
+    setPlanResult((prev) => {
+      if (!prev) return prev;
+      const items = prev.items.slice();
+      items[i] = { ...items[i], ...patch };
+      return { ...prev, items };
+    });
+  }
+
   function addSelectedPlanItems() {
     if (!planResult) return;
     const toAdd = planResult.items
@@ -813,12 +843,16 @@ export default function QuoteBuilder({
     // else the model couldn't tie to one room) comes back with room
     // "General" or blank — which used to land it in its own separate
     // "General" section on the quote, away from the room it actually
-    // belongs with. When this batch is really just one room's worth of
+    // belongs with. When this plan read is really just one room's worth of
     // items (the normal case — one plan read, one room), fall back to that
     // room instead, so every item added from this read lands in the same
-    // section rather than splitting off a stray "General" heading.
+    // section rather than splitting off a stray "General" heading. This is
+    // worked out from the WHOLE read (planResult.items), not just the items
+    // selected in this particular click — the estimator may add a plan's
+    // items in more than one batch (e.g. cabinetry first, end panels after),
+    // and each batch should still land in the same room.
     const roomCounts = new Map<string, number>();
-    toAdd.forEach(({ it }) => {
+    planResult.items.forEach((it) => {
       const room = it.room?.trim();
       if (room && room !== "General") roomCounts.set(room, (roomCounts.get(room) || 0) + 1);
     });
@@ -1357,15 +1391,45 @@ export default function QuoteBuilder({
                         <div className="flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium">{it.name}</span>
-                            <span className="text-ink-soft">
-                              — {it.room} · {it.qty} {it.unit}
-                              {it.drawer_count > 0 &&
-                                ` · ${it.drawer_count} drawers${
-                                  it.pto_drawer_count > 0
-                                    ? ` (${it.drawer_count - it.pto_drawer_count} standard + ${it.pto_drawer_count} PTO)`
-                                    : ""
-                                }`}
-                            </span>
+                            <span className="text-ink-soft">— {it.room} ·</span>
+                            {/* Editable — the AI read gets very close on a complex
+                                multi-wall plan, but a vision read can land slightly
+                                off on one wall's measured length; fixing the number
+                                here takes seconds and beats another re-upload. */}
+                            <input
+                              type="number"
+                              step="0.001"
+                              min="0"
+                              className="w-20 px-1.5 py-0.5 text-sm border border-line-strong rounded"
+                              value={it.qty}
+                              onChange={(e) => updatePlanItem(i, { qty: Number(e.target.value) || 0 })}
+                              title="Quantity — edit if the AI's read looks off"
+                            />
+                            <span className="text-ink-soft">{it.unit}</span>
+                            {it.drawer_count > 0 && (
+                              <span className="text-ink-soft flex items-center gap-1">
+                                ·
+                                <input
+                                  type="number"
+                                  step="1"
+                                  min="0"
+                                  className="w-14 px-1.5 py-0.5 text-sm border border-line-strong rounded"
+                                  value={it.drawer_count}
+                                  onChange={(e) => {
+                                    const next = Math.max(0, Math.round(Number(e.target.value) || 0));
+                                    updatePlanItem(i, {
+                                      drawer_count: next,
+                                      pto_drawer_count: Math.min(it.pto_drawer_count, next),
+                                    });
+                                  }}
+                                  title="Drawer count — edit if the AI's read looks off"
+                                />
+                                drawers
+                                {it.pto_drawer_count > 0
+                                  ? ` (${it.drawer_count - it.pto_drawer_count} standard + ${it.pto_drawer_count} PTO)`
+                                  : ""}
+                              </span>
+                            )}
                           </div>
                           {planItemFlag[i] && <span className="block text-xs text-brick mt-0.5">⚠ {planItemFlag[i]}</span>}
                           {it.drawer_count > 0 && (
