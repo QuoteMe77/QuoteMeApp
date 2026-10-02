@@ -44,8 +44,12 @@ For each distinct item, return:
 
 Also include a top-level "flags" array of short strings for anything an estimator should double-check by eye before quoting — illegible dimensions, tags with no matching legend, contradictions between drawings, or scope you could not confidently quantify at all.
 
+Also look at the drawing's title block (usually bottom-left or bottom-right of the sheet) for who the job is for and where it is: "client_name" is the customer/client name shown there (e.g. a "CUSTOMER" field), and "job_address" is the site address, combining a street address with its suburb/postcode if both are given (e.g. "29 Duxford Street, Elizabeth Hills 2171"). Leave either as an empty string if the title block doesn't state it — never guess or invent one from a room label or anything else on the drawing.
+
 Respond with ONLY a JSON object of this exact shape, no other text:
 {
+  "client_name": "",
+  "job_address": "",
   "items": [ { "room": "...", "name": "...", "cabinet_type": "base", "open": false, "calc": "LM", "qty": 0, "unit": "lm", "material_hint": "", "drawer_count": 0, "pto_drawer_count": 0, "drawer_brand": "", "note": "...", "confidence": "medium" } ],
   "flags": [ "..." ]
 }`;
@@ -197,7 +201,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No response from the model." }, { status: 502 });
   }
 
-  let parsed: { items: PlanItem[]; flags: string[] };
+  let parsed: { client_name?: string; job_address?: string; items: PlanItem[]; flags: string[] };
   try {
     const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/);
     parsed = JSON.parse(jsonMatch ? jsonMatch[0] : textBlock.text);

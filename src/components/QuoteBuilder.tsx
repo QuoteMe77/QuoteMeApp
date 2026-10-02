@@ -535,6 +535,11 @@ export default function QuoteBuilder({
         return;
       }
       setPlanResult(data);
+      // Only fill these in when the estimator hasn't already typed something
+      // — the plan is a convenience, not an override of what's already on
+      // the quote.
+      if (data.client_name && !clientName.trim()) setClientName(data.client_name);
+      if (data.job_address && !jobAddress.trim()) setJobAddress(data.job_address);
       setSelectedPlanItems(new Set(data.items.map((_: unknown, i: number) => i)));
       const defaults: Record<number, string> = {};
       const flags: Record<number, string> = {};

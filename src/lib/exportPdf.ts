@@ -122,22 +122,18 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     doc.text(area, marginX, y + 12);
     y += 18;
 
-    // This is a lump-sum quote: the client sees the full scope of work per
-    // area, but pricing is a single total at the bottom rather than a rate
-    // and line total next to every item — so the table lists what's
-    // included (and how much of it), not what each piece costs.
+    // This is a lump-sum quote: the client sees the full scope of work
+    // per area, with pricing as a single total at the bottom — so the
+    // table is just a plain description of what's included, with no
+    // quantity, rate, or linear-metre figure attached to any line.
     autoTable(doc, {
       startY: y,
       margin: { left: marginX, right: marginX },
-      head: [["Item", "Qty", "Unit"]],
-      body: rows.map((it) => [it.note ? `${it.name}\n${it.note}` : it.name, String(it.qty), it.unit]),
+      head: [["Item"]],
+      body: rows.map((it) => [it.note ? `${it.name}\n${it.note}` : it.name]),
       styles: { fontSize: 9, textColor: inkColor, cellPadding: 5 },
       headStyles: { fillColor: [239, 234, 224], textColor: inkColor, fontStyle: "bold" },
       alternateRowStyles: { fillColor: [251, 248, 243] },
-      columnStyles: {
-        1: { cellWidth: 50, halign: "right" },
-        2: { cellWidth: 60 },
-      },
       didDrawPage: (data) => {
         y = data.cursor?.y ?? y;
       },

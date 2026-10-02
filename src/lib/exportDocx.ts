@@ -78,10 +78,11 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
   });
 
   // This is a lump-sum quote: the client sees the full scope of work per
-  // area, but pricing is a single total at the bottom rather than a rate
-  // and line total next to every item.
+  // area, with pricing as a single total at the bottom — so each line is
+  // just a plain description of what's included, with no quantity, rate,
+  // or linear-metre figure attached.
   const areas = Array.from(new Set(quote.items.map((it) => it.area || "General")));
-  const colWidths = [6900, 1500, 1500]; // sums to 9900 DXA
+  const colWidths = [9900]; // full table width, single column
 
   areas.forEach((area) => {
     const rows = quote.items.filter((it) => (it.area || "General") === area);
@@ -96,17 +97,11 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
     );
 
     const tableRows: TableRow[] = [
-      new TableRow({
-        children: [headerCell("Item", colWidths[0]), headerCell("Qty", colWidths[1]), headerCell("Unit", colWidths[2])],
-      }),
+      new TableRow({ children: [headerCell("Item", colWidths[0])] }),
       ...rows.map(
         (it) =>
           new TableRow({
-            children: [
-              bodyCell(it.note ? `${it.name} — ${it.note}` : it.name, colWidths[0]),
-              bodyCell(String(it.qty), colWidths[1], AlignmentType.RIGHT),
-              bodyCell(it.unit, colWidths[2]),
-            ],
+            children: [bodyCell(it.note ? `${it.name} — ${it.note}` : it.name, colWidths[0])],
           })
       ),
     ];
