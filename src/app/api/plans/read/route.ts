@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { REFERENCE_EXAMPLES } from "./referenceExamples";
 
 export const runtime = "nodejs";
 // Raised from 60s: extended thinking (added below) gives the model time to
@@ -167,7 +168,26 @@ export async function POST(request: NextRequest) {
   let content: unknown[];
   try {
     const planBlock = await toContentBlock(planPath);
-    content = [{ type: "text", text: "Drawing to quote from:" }, planBlock];
+    // Worked examples first (see referenceExamples.ts): real Vicello jobs
+    // with the correct classification hand-labelled by the business owner,
+    // so the model has this company's own drawing conventions to
+    // pattern-match against before it ever looks at the actual job below.
+    content = [
+      {
+        type: "text",
+        text: "Before the actual job, here are a few worked examples from past Vicello Kitchens jobs. Each one has been hand-annotated (in red/orange) by the business to show the correct classification — the annotations are a teaching aid added afterwards, not something printed on an original drawing. Study how each one reads, then apply the same thinking to the real job that follows.",
+      },
+      ...REFERENCE_EXAMPLES.flatMap((ex) => [
+        { type: "text", text: ex.caption },
+        { type: "image", source: { type: "base64", media_type: ex.mediaType, data: ex.data } },
+      ]),
+      {
+        type: "text",
+        text: "That's the end of the worked examples. Now here is the ACTUAL job to read and quote from — nothing in it is pre-annotated, so read it fresh using what the examples above just illustrated:",
+      },
+      { type: "text", text: "Drawing to quote from:" },
+      planBlock,
+    ];
     if (typeof schedulePath === "string" && schedulePath) {
       const scheduleBlock = await toContentBlock(schedulePath);
       content.push(
