@@ -1377,6 +1377,13 @@ export default function QuoteBuilder({
           {savedNotice && <span className="text-xs text-spruce">Saved</span>}
           {saveError && <span className="text-xs text-brick">{saveError}</span>}
           <button
+            onClick={() => router.refresh()}
+            className="text-xs border border-line-strong rounded-md px-3 py-1.5 hover:bg-paper"
+            title="Reload this quote's data from the server"
+          >
+            ↻ Refresh
+          </button>
+          <button
             onClick={handleExportPdf}
             disabled={lineItems.length === 0}
             className="text-xs border border-line-strong rounded-md px-3 py-1.5 hover:bg-paper disabled:opacity-40"
