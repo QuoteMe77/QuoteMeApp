@@ -265,7 +265,11 @@ export default function QuoteBuilder({
 
   const [planUploading, setPlanUploading] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
-  const [planResult, setPlanResult] = useState<{ items: PlanItemResult[]; flags: string[] } | null>(null);
+  const [planResult, setPlanResult] = useState<{
+    items: PlanItemResult[];
+    flags: string[];
+    consistency_warnings?: string[];
+  } | null>(null);
   const [selectedPlanItems, setSelectedPlanItems] = useState<Set<number>>(new Set());
   // index -> chosen price_book_items.id for base/wall/tall items awaiting a material pick
   const [planItemMaterial, setPlanItemMaterial] = useState<Record<number, string>>({});
@@ -1391,6 +1395,18 @@ export default function QuoteBuilder({
 
         {planResult && (
           <div className="mt-4">
+            {planResult.consistency_warnings && planResult.consistency_warnings.length > 0 && (
+              <div className="bg-red-50 border border-red-300 rounded-md p-3 mb-3 text-xs text-red-800">
+                <span className="font-semibold">
+                  The plan was read twice and the two reads didn&apos;t fully agree —{" "}
+                </span>
+                <ul className="list-disc pl-4 mt-1 space-y-0.5">
+                  {planResult.consistency_warnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {planResult.flags.length > 0 && (
               <div className="bg-paper border border-line rounded-md p-3 mb-3 text-xs text-ink-soft">
                 <span className="font-semibold text-brick">Double-check before quoting: </span>

@@ -175,62 +175,137 @@ export async function POST(request: NextRequest) {
     () => {}
   );
 
-  let message;
-  try {
-    message = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
-      // Extended thinking gives the model room to work through the plan
-      // step by step — cross-checking one sheet against another, catching
-      // its own contradictions — before it commits to the final JSON,
-      // instead of having to produce a correct answer to a genuinely hard
-      // multi-page reading task in one immediate pass. max_tokens is raised
-      // to comfortably cover the thinking budget plus a full item list for
-      // a busy multi-room plan; thinking requires temperature 1 (the
-      // default here, left unset).
-      max_tokens: 12000,
-      thinking: { type: "enabled", budget_tokens: 6000 },
-      messages: [
-        {
-          role: "user",
-          // The installed SDK version's TypeScript types don't yet include
-          // "document" blocks in this content array's union (PDF support was
-          // added to the API before the type defs caught up), even though
-          // the API itself accepts it — cast at this single call site rather
-          // than losing type-safety on the rest of the file.
-          content: content as never,
-        },
-      ],
-    } as never);
-  } catch (err) {
-    console.error("Anthropic plan-read call failed:", err);
-    // Surface the actual reason in the response rather than a generic
-    // message — digging through Vercel's logs for this is slow, and the
-    // Anthropic SDK's error shape varies by failure type, so this reads
-    // whatever fields are actually present instead of assuming one.
-    const anyErr = err as { status?: number; message?: string; error?: { message?: string } };
-    const detail =
-      anyErr?.error?.message || anyErr?.message || (err instanceof Error ? err.message : "Unknown error.");
-    const status = anyErr?.status;
-    return NextResponse.json(
-      {
+  type ParsedPlan = { client_name?: string; job_address?: string; items: PlanItem[]; flags: string[] };
+
+  // A single vision read of a complex multi-page plan isn't deterministic —
+  // the same file can come back with a different wall measurement on two
+  // separate uploads, because extended thinking (above) runs at temperature
+  // 1 by design. Rather than trust one roll of the dice, the plan is read
+  // TWICE in parallel and the two independent reads are compared below; any
+  // base/wall/tall figure they disagree on is surfaced as an explicit
+  // warning instead of silently going with whichever read happened to come
+  // back. This doubles the API cost and the thinking latency of a single
+  // call, but a wrong, confidently-presented number is worse than that.
+  async function readOnce(): Promise<{ parsed: ParsedPlan; error: null } | { parsed: null; error: string }> {
+    let message;
+    try {
+      message = await anthropic.messages.create({
+        model: "claude-sonnet-4-5",
+        // Extended thinking gives the model room to work through the plan
+        // step by step — cross-checking one sheet against another, catching
+        // its own contradictions — before it commits to the final JSON,
+        // instead of having to produce a correct answer to a genuinely hard
+        // multi-page reading task in one immediate pass. max_tokens is raised
+        // to comfortably cover the thinking budget plus a full item list for
+        // a busy multi-room plan; thinking requires temperature 1 (the
+        // default here, left unset).
+        max_tokens: 12000,
+        thinking: { type: "enabled", budget_tokens: 6000 },
+        messages: [
+          {
+            role: "user",
+            // The installed SDK version's TypeScript types don't yet include
+            // "document" blocks in this content array's union (PDF support
+            // was added to the API before the type defs caught up), even
+            // though the API itself accepts it — cast at this single call
+            // site rather than losing type-safety on the rest of the file.
+            content: content as never,
+          },
+        ],
+      } as never);
+    } catch (err) {
+      console.error("Anthropic plan-read call failed:", err);
+      // Surface the actual reason in the response rather than a generic
+      // message — digging through Vercel's logs for this is slow, and the
+      // Anthropic SDK's error shape varies by failure type, so this reads
+      // whatever fields are actually present instead of assuming one.
+      const anyErr = err as { status?: number; message?: string; error?: { message?: string } };
+      const detail =
+        anyErr?.error?.message || anyErr?.message || (err instanceof Error ? err.message : "Unknown error.");
+      const status = anyErr?.status;
+      return {
+        parsed: null,
         error: `Could not read the plan right now.${status ? ` (Anthropic error ${status})` : ""} ${detail}`.trim(),
-      },
-      { status: 502 }
-    );
+      };
+    }
+
+    const textBlock = message.content.find((block) => block.type === "text");
+    if (!textBlock || textBlock.type !== "text") {
+      return { parsed: null, error: "No response from the model." };
+    }
+
+    try {
+      const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/);
+      return { parsed: JSON.parse(jsonMatch ? jsonMatch[0] : textBlock.text), error: null };
+    } catch {
+      return { parsed: null, error: "Could not parse the model's response." };
+    }
   }
 
-  const textBlock = message.content.find((block) => block.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    return NextResponse.json({ error: "No response from the model." }, { status: 502 });
+  // Groups a read's base/wall/tall items the same way the client's
+  // mergePlanBands does (room + cabinet_type + open/closed), so the two
+  // reads are compared band-for-band rather than item-for-item (item order
+  // and wall-splitting can differ between reads even when the true total
+  // doesn't).
+  function summarizeLmBands(items: PlanItem[]): Map<string, { qty: number; label: string }> {
+    const out = new Map<string, { qty: number; label: string }>();
+    for (const it of items) {
+      if (it.calc !== "LM" || !["base", "wall", "tall"].includes(it.cabinet_type)) continue;
+      const room = (it.room || "General").trim();
+      const key = [room.toLowerCase(), it.cabinet_type, it.open ? "open" : "closed"].join("|");
+      const label = `${it.cabinet_type[0].toUpperCase()}${it.cabinet_type.slice(1)} cabinet — ${room}`;
+      const existing = out.get(key) || { qty: 0, label };
+      existing.qty += it.qty || 0;
+      out.set(key, existing);
+    }
+    return out;
   }
 
-  let parsed: { client_name?: string; job_address?: string; items: PlanItem[]; flags: string[] };
-  try {
-    const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/);
-    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : textBlock.text);
-  } catch {
-    return NextResponse.json({ error: "Could not parse the model's response." }, { status: 502 });
+  function compareReads(a: PlanItem[], b: PlanItem[]): string[] {
+    const sumsA = summarizeLmBands(a);
+    const sumsB = summarizeLmBands(b);
+    const keys = new Set([...sumsA.keys(), ...sumsB.keys()]);
+    const warnings: string[] = [];
+    keys.forEach((key) => {
+      const entryA = sumsA.get(key);
+      const entryB = sumsB.get(key);
+      const qtyA = entryA?.qty ?? 0;
+      const qtyB = entryB?.qty ?? 0;
+      const label = (entryA || entryB)!.label;
+      const diff = Math.abs(qtyA - qtyB);
+      const tolerance = Math.max(0.15, 0.15 * Math.max(qtyA, qtyB));
+      if (diff > tolerance) {
+        if (!entryA || !entryB) {
+          warnings.push(
+            `${label}: only one of two independent reads found this (${(entryA ? qtyA : qtyB).toFixed(
+              3
+            )} lm) — the other read missed it entirely. Verify it's really there.`
+          );
+        } else {
+          warnings.push(
+            `${label}: two independent reads disagree (${qtyA.toFixed(3)} lm vs ${qtyB.toFixed(
+              3
+            )} lm) — the AI isn't confident here, double-check against the plan before pricing.`
+          );
+        }
+      }
+    });
+    return warnings;
   }
 
-  return NextResponse.json(parsed);
+  const [resultA, resultB] = await Promise.all([readOnce(), readOnce()]);
+
+  // If both reads failed outright, there's nothing to fall back to.
+  if (!resultA.parsed && !resultB.parsed) {
+    return NextResponse.json({ error: resultA.error || resultB.error }, { status: 502 });
+  }
+
+  // Prefer whichever read succeeded; if both did, read #1 is used as the
+  // one actually shown, with disagreements against read #2 attached as
+  // warnings rather than trying to auto-merge or auto-pick a "winner".
+  const primary = resultA.parsed || resultB.parsed!;
+  const consistencyWarnings =
+    resultA.parsed && resultB.parsed ? compareReads(resultA.parsed.items, resultB.parsed.items) : [];
+
+  return NextResponse.json({ ...primary, consistency_warnings: consistencyWarnings });
 }
