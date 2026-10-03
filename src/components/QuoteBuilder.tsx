@@ -120,6 +120,68 @@ async function renderPdfThumbnails(file: File, onPage: (index: number, dataUrl: 
   }
 }
 
+// Re-renders one page of the plan (PDF or a plain image upload) and draws a
+// highlight box at the AI-reported fractional bbox, so the estimator can see
+// exactly what the model was looking at rather than just trusting the
+// number it produced. This is a visual aid, not a verified measurement —
+// the model's own best guess at where it read something, nothing more.
+async function renderPlanRegionPreview(
+  file: File,
+  page: number,
+  bbox: [number, number, number, number]
+): Promise<string> {
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+  const canvas = document.createElement("canvas");
+  let ctx: CanvasRenderingContext2D | null;
+
+  if (isPdf) {
+    ensurePdfjsWorker();
+    const data = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const pageIndex = Math.min(Math.max(page, 1), pdf.numPages);
+    const pdfPage = await pdf.getPage(pageIndex);
+    const baseViewport = pdfPage.getViewport({ scale: 1 });
+    const scale = Math.min(2.5, 1600 / baseViewport.width);
+    const viewport = pdfPage.getViewport({ scale });
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    ctx = canvas.getContext("2d");
+    if (ctx) await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+    pdfPage.cleanup();
+  } else {
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.src = objectUrl;
+      await img.decode();
+      const scale = Math.min(2.5, 1600 / img.width);
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      ctx = canvas.getContext("2d");
+      if (ctx) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  if (ctx) {
+    const [x0, y0, x1, y1] = bbox;
+    const bx = Math.max(0, Math.min(1, x0)) * canvas.width;
+    const by = Math.max(0, Math.min(1, y0)) * canvas.height;
+    const bw = Math.max(0, Math.min(1, x1) - Math.min(1, Math.max(0, x0))) * canvas.width;
+    const bh = Math.max(0, Math.min(1, y1) - Math.min(1, Math.max(0, y0))) * canvas.height;
+    ctx.save();
+    ctx.fillStyle = "rgba(225, 29, 72, 0.18)";
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = "#e11d48";
+    ctx.lineWidth = Math.max(2, canvas.width * 0.003);
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.restore();
+  }
+
+  return canvas.toDataURL("image/jpeg", 0.85);
+}
+
 type Calc = "LM" | "QTY" | "MISC";
 
 type PriceBookItem = {
@@ -261,6 +323,11 @@ export default function QuoteBuilder({
     // double-counts its length once summed. Undefined when nothing looked
     // suspicious.
     duplicate_wall_warning?: string;
+    // Where on the plan the model says it read this item from — one entry
+    // per page it's drawn on, each a fractional (0-1) bounding box of that
+    // page. Used only to let the estimator visually sanity-check a read
+    // against the actual drawing; not guaranteed pixel-accurate.
+    regions?: { page: number; bbox: [number, number, number, number] }[];
   };
 
   const [planUploading, setPlanUploading] = useState(false);
@@ -277,6 +344,17 @@ export default function QuoteBuilder({
   // index -> note explaining the match (or lack of one) for that item, shown to the estimator
   const [planItemFlag, setPlanItemFlag] = useState<Record<number, string>>({});
   const [scheduleFileName, setScheduleFileName] = useState<string | null>(null);
+  // The plan file itself, kept purely so "View on plan" (below) can
+  // re-render a page on demand and draw the AI's reported region on it.
+  const [lastPlanFile, setLastPlanFile] = useState<File | null>(null);
+  const [regionPreview, setRegionPreview] = useState<{
+    itemName: string;
+    regions: { page: number; bbox: [number, number, number, number] }[];
+    index: number;
+    imageUrl: string | null;
+    loading: boolean;
+    error: string | null;
+  } | null>(null);
   const scheduleFileRef = useRef<File | null>(null);
 
   function categoryPrefixFor(cabinetType: string): string | null {
@@ -546,6 +624,50 @@ export default function QuoteBuilder({
     return { items: reconciled, roomLabels };
   }
 
+  async function showRegionAt(itemName: string, regions: { page: number; bbox: [number, number, number, number] }[], index: number) {
+    if (!lastPlanFile) {
+      setRegionPreview({
+        itemName,
+        regions,
+        index,
+        imageUrl: null,
+        loading: false,
+        error: "The plan file isn't available anymore in this session — re-upload the plan to use this preview.",
+      });
+      return;
+    }
+    setRegionPreview({ itemName, regions, index, imageUrl: null, loading: true, error: null });
+    try {
+      const url = await renderPlanRegionPreview(lastPlanFile, regions[index].page, regions[index].bbox);
+      setRegionPreview((prev) => (prev ? { ...prev, imageUrl: url, loading: false } : prev));
+    } catch (err) {
+      setRegionPreview((prev) =>
+        prev
+          ? { ...prev, loading: false, error: err instanceof Error ? err.message : "Could not render this page." }
+          : prev
+      );
+    }
+  }
+
+  function openRegionPreview(it: PlanItemResult) {
+    if (!it.regions || it.regions.length === 0) return;
+    showRegionAt(it.name, it.regions, 0);
+  }
+
+  function stepRegionPreview(delta: number) {
+    setRegionPreview((prev) => {
+      if (!prev) return prev;
+      const nextIndex = Math.max(0, Math.min(prev.regions.length - 1, prev.index + delta));
+      if (nextIndex === prev.index) return prev;
+      showRegionAt(prev.itemName, prev.regions, nextIndex);
+      return { ...prev, index: nextIndex, loading: true, imageUrl: null };
+    });
+  }
+
+  function closeRegionPreview() {
+    setRegionPreview(null);
+  }
+
   function mergePlanBands(items: PlanItemResult[]): PlanItemResult[] {
     const mergeable = (it: PlanItemResult) =>
       it.calc === "LM" && (it.cabinet_type === "base" || it.cabinet_type === "wall" || it.cabinet_type === "tall");
@@ -572,6 +694,7 @@ export default function QuoteBuilder({
         confidences: string[];
         brands: string[];
         bestHint: string;
+        regions: { page: number; bbox: [number, number, number, number] }[];
       }
     >();
     for (const it of items) {
@@ -587,6 +710,7 @@ export default function QuoteBuilder({
           confidences: [] as string[],
           brands: [] as string[],
           bestHint: "",
+          regions: [] as { page: number; bbox: [number, number, number, number] }[],
         };
       s.qty += it.qty || 0;
       s.drawer_count += it.drawer_count || 0;
@@ -600,6 +724,7 @@ export default function QuoteBuilder({
       // same-type items wins — a wall that got its finish fully described
       // shouldn't lose to a wall where the model only wrote a few words.
       if (it.material_hint.trim().length > s.bestHint.length) s.bestHint = it.material_hint.trim();
+      if (Array.isArray(it.regions)) s.regions.push(...it.regions);
       sums.set(key, s);
     }
 
@@ -639,6 +764,7 @@ export default function QuoteBuilder({
         note: s.notes.join("; "),
         confidence,
         duplicate_wall_warning: duplicateWallWarning,
+        regions: s.regions,
       });
     }
     return merged;
@@ -662,6 +788,11 @@ export default function QuoteBuilder({
     setPlanResult(null);
     setPlanItemMaterial({});
     setPlanItemFlag({});
+    // Kept so the "View on plan" preview (below) can re-render the actual
+    // page later and draw the AI's reported region on it — the server
+    // deletes its copy of the upload right after reading it, so this is the
+    // only copy left once the read comes back.
+    setLastPlanFile(planFile);
 
     // Checked here, before anything is uploaded, because this is the one
     // call site every upload path goes through (direct or via the page
@@ -1567,6 +1698,16 @@ export default function QuoteBuilder({
                                   : ""}
                               </span>
                             )}
+                            {it.regions && it.regions.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => openRegionPreview(it)}
+                                className="text-xs text-brass hover:text-brass-deep underline underline-offset-2"
+                                title="Show exactly where the AI read this on the plan"
+                              >
+                                📍 View on plan
+                              </button>
+                            )}
                           </div>
                           {it.duplicate_wall_warning && (
                             <span className="block text-xs font-medium text-red-600 mt-0.5">
@@ -1641,6 +1782,57 @@ export default function QuoteBuilder({
           </div>
         )}
       </section>
+
+      {regionPreview && (
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={closeRegionPreview}
+        >
+          <div
+            className="bg-paper-raised rounded-lg p-4 max-w-3xl w-full max-h-[90vh] overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-2 gap-3">
+              <span className="font-medium text-sm">
+                {regionPreview.itemName} — page {regionPreview.regions[regionPreview.index].page}
+                {regionPreview.regions.length > 1
+                  ? ` (${regionPreview.index + 1} of ${regionPreview.regions.length})`
+                  : ""}
+              </span>
+              <button onClick={closeRegionPreview} className="text-ink-soft hover:text-ink text-lg leading-none">
+                ✕
+              </button>
+            </div>
+            {regionPreview.loading && <p className="text-sm text-ink-soft py-8 text-center">Rendering page…</p>}
+            {regionPreview.error && <p className="text-sm text-brick py-8 text-center">{regionPreview.error}</p>}
+            {regionPreview.imageUrl && (
+              <img src={regionPreview.imageUrl} alt="Plan region" className="max-w-full rounded border border-line" />
+            )}
+            {regionPreview.regions.length > 1 && (
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={() => stepRegionPreview(-1)}
+                  disabled={regionPreview.index === 0}
+                  className="text-sm px-3 py-1 border border-line-strong rounded disabled:opacity-40"
+                >
+                  ← Prev
+                </button>
+                <button
+                  onClick={() => stepRegionPreview(1)}
+                  disabled={regionPreview.index === regionPreview.regions.length - 1}
+                  className="text-sm px-3 py-1 border border-line-strong rounded disabled:opacity-40"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+            <p className="text-[11px] text-ink-soft mt-2">
+              This is the AI's own best guess at where it read this item — a visual cross-check, not a verified
+              measurement.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Ledger */}
       <section className="bg-paper-raised border border-line-strong rounded-lg p-5 mb-5">

@@ -55,6 +55,7 @@ For each item, return:
 - "drawer_brand": the brand/code exactly as written (e.g. "ANT", "MER") — don't expand or guess. Empty string if none stated.
 - "note": for a base/wall/tall item, lead with its wall/location name (matching the one consistent name chosen for that wall) — then any other detail worth keeping (height, hardware, a mixed drawer split). Brief, or empty if nothing beyond the wall reference is needed.
 - "confidence": "high" | "medium" | "low".
+- "regions": an array of objects — one per PAGE, within the plan document as uploaded (never the finishes/hardware schedule document), where this item's actual cabinetry or fitting is DRAWN (not where a note or finish code about it happens to sit). Each object is { "page": N, "bbox": [x_min, y_min, x_max, y_max] } where N is the 1-indexed page number in the plan document, and the four bbox numbers are fractions from 0 to 1 of that whole page's width and height — [x_min, y_min] is the top-left corner and [x_max, y_max] the bottom-right corner of a box drawn around the relevant run or fitting on that page. This is for a human to visually sanity-check your read against the drawing, so a reasonably tight box around the real thing is far more useful than a loose one covering half the page — give your honest best visual estimate, not a placeholder. One run that's drawn on more than one page (e.g. the same wall shown again in a 3D sketch) can have more than one entry. Empty array only if you genuinely cannot localize it on any page.
 
 Also return a top-level "flags" array — short strings for anything to double-check (illegible dimensions, unmatched tags, contradictions, unquantifiable scope).
 
@@ -64,7 +65,7 @@ Respond with ONLY a JSON object of this exact shape, no other text:
 {
   "client_name": "",
   "job_address": "",
-  "items": [ { "room": "...", "name": "...", "cabinet_type": "base", "open": false, "calc": "LM", "qty": 0, "unit": "lm", "material_hint": "", "drawer_count": 0, "pto_drawer_count": 0, "drawer_brand": "", "note": "...", "confidence": "medium" } ],
+  "items": [ { "room": "...", "name": "...", "cabinet_type": "base", "open": false, "calc": "LM", "qty": 0, "unit": "lm", "material_hint": "", "drawer_count": 0, "pto_drawer_count": 0, "drawer_brand": "", "note": "...", "confidence": "medium", "regions": [ { "page": 1, "bbox": [0.1, 0.2, 0.9, 0.4] } ] } ],
   "flags": [ "..." ]
 }`;
 
@@ -82,6 +83,7 @@ type PlanItem = {
   drawer_brand: string;
   note: string;
   confidence: "high" | "medium" | "low";
+  regions?: { page: number; bbox: [number, number, number, number] }[];
 };
 
 /**
