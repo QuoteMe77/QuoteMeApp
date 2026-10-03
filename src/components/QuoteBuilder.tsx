@@ -1367,6 +1367,45 @@ export default function QuoteBuilder({
     });
   }
 
+  // Clears everything on screen so the estimator can start a fresh quote.
+  // This never touches what's saved in the database — if this was an
+  // existing saved quote, it just navigates to a blank "New quote" page
+  // (so a later Save creates a new quote instead of overwriting this one);
+  // if it was already a blank new-quote page, it resets the form in place.
+  function handleStartNew() {
+    const hasContent =
+      lineItems.length > 0 || clientName || jobAddress || quoteRef || notes || planResult;
+    if (hasContent) {
+      const ok = window.confirm("Clear this quote and start a new one? Anything unsaved will be lost.");
+      if (!ok) return;
+    }
+    if (quote?.id) {
+      router.push("/dashboard/quotes/new");
+      return;
+    }
+    setClientName("");
+    setJobAddress("");
+    setQuoteRef("");
+    setQuoteDate(new Date().toISOString().slice(0, 10));
+    setValidDays(30);
+    setMarkupPct(32);
+    setNotes("");
+    setBuilderName(defaultBuilderName);
+    setLineItems([]);
+    setSearch("");
+    setActiveArea("General");
+    setPlanResult(null);
+    setSelectedPlanItems(new Set());
+    setPlanItemMaterial({});
+    setPlanItemFlag({});
+    setScheduleFileName(null);
+    setLastPlanFile(null);
+    setRegionPreview(null);
+    setPlanError(null);
+    setSaveError(null);
+    setSavedNotice(false);
+  }
+
   return (
     <div className="max-w-5xl mx-auto pb-16">
       <div className="flex items-center justify-between mb-5">
@@ -1377,11 +1416,11 @@ export default function QuoteBuilder({
           {savedNotice && <span className="text-xs text-spruce">Saved</span>}
           {saveError && <span className="text-xs text-brick">{saveError}</span>}
           <button
-            onClick={() => router.refresh()}
+            onClick={handleStartNew}
             className="text-xs border border-line-strong rounded-md px-3 py-1.5 hover:bg-paper"
-            title="Reload this quote's data from the server"
+            title="Clear this quote and start a new one (doesn't delete anything already saved)"
           >
-            ↻ Refresh
+            ↻ Start new quote
           </button>
           <button
             onClick={handleExportPdf}
