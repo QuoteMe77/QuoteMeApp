@@ -269,6 +269,7 @@ export default function QuoteBuilder({
     items: PlanItemResult[];
     flags: string[];
     consistency_warnings?: string[];
+    room_label_warning?: string;
   } | null>(null);
   const [selectedPlanItems, setSelectedPlanItems] = useState<Set<number>>(new Set());
   // index -> chosen price_book_items.id for base/wall/tall items awaiting a material pick
@@ -488,6 +489,63 @@ export default function QuoteBuilder({
   // open/closed) is combined into one, and the most complete material_hint
   // and all distinct drawer brands seen are carried onto that one merged
   // item instead.
+  // Runs BEFORE mergePlanBands. The model is told to use one consistent
+  // room name for every item in a single-room document, but doesn't always
+  // hold that consistency — in practice a generic category word like
+  // "Kitchen" is the most common wrong label, inferred from an appliance
+  // (a fridge/dishwasher) rather than read off the sheet's actual title.
+  // When the exact same physical run (identical name + cabinet_type +
+  // material_hint) is filed under two different room labels, that's
+  // unambiguous: it's one run counted twice under two names, not two
+  // separate rooms each with their own cabinetry — so those get folded
+  // back onto a single label here, before mergePlanBands ever groups by
+  // room (otherwise they'd survive as two separate line items in two
+  // separate room sections on the exported quote, instead of one).
+  function reconcileRoomLabels(items: PlanItemResult[]): { items: PlanItemResult[]; roomLabels: string[] } {
+    const GENERIC_INFERRED_WORDS = new Set(["kitchen", "laundry", "bathroom", "ensuite", "toilet", "wc"]);
+    const dupKey = (it: PlanItemResult) =>
+      [it.name.trim().toLowerCase(), it.cabinet_type, it.material_hint.trim().toLowerCase()].join("|");
+
+    const groups = new Map<string, PlanItemResult[]>();
+    items.forEach((it) => {
+      const room = (it.room || "").trim();
+      if (!room || room === "General") return;
+      const key = dupKey(it);
+      const g = groups.get(key) || [];
+      g.push(it);
+      groups.set(key, g);
+    });
+
+    const relabel = new Map<PlanItemResult, string>();
+    groups.forEach((group) => {
+      const rooms = new Set(group.map((it) => it.room.trim()));
+      if (rooms.size <= 1) return; // already consistent — nothing to reconcile
+
+      // Winning label: most frequent among this duplicate's own
+      // occurrences; ties go against a generic, appliance-inferable word
+      // in favour of whatever more specific label was also used.
+      const counts = new Map<string, number>();
+      group.forEach((it) => counts.set(it.room.trim(), (counts.get(it.room.trim()) || 0) + 1));
+      let winner = "";
+      let winnerCount = -1;
+      counts.forEach((count, room) => {
+        const winnerIsGeneric = GENERIC_INFERRED_WORDS.has(winner.toLowerCase());
+        const roomIsGeneric = GENERIC_INFERRED_WORDS.has(room.toLowerCase());
+        if (count > winnerCount || (count === winnerCount && winnerIsGeneric && !roomIsGeneric)) {
+          winner = room;
+          winnerCount = count;
+        }
+      });
+      group.forEach((it) => relabel.set(it, winner));
+    });
+
+    const reconciled = items.map((it) => (relabel.has(it) ? { ...it, room: relabel.get(it)! } : it));
+    const roomLabels = Array.from(
+      new Set(reconciled.map((it) => (it.room || "").trim()).filter((r) => r && r !== "General"))
+    );
+    return { items: reconciled, roomLabels };
+  }
+
   function mergePlanBands(items: PlanItemResult[]): PlanItemResult[] {
     const mergeable = (it: PlanItemResult) =>
       it.calc === "LM" && (it.cabinet_type === "base" || it.cabinet_type === "wall" || it.cabinet_type === "tall");
@@ -664,12 +722,30 @@ export default function QuoteBuilder({
         setPlanError(data.error || "Could not read this plan.");
         return;
       }
-      // Combine matching base/wall/tall bands from different walls here —
-      // see mergePlanBands for why this is done in code rather than asking
-      // the model to do the cross-wall arithmetic itself.
+      // Fold any duplicate run filed under two different room labels back
+      // onto one label (see reconcileRoomLabels), then combine matching
+      // base/wall/tall bands from different walls — see mergePlanBands for
+      // why that's done in code rather than asking the model to do the
+      // cross-wall arithmetic itself.
+      let roomLabels: string[] = [];
       if (Array.isArray(data.items)) {
-        data.items = mergePlanBands(data.items as PlanItemResult[]);
+        const reconciled = reconcileRoomLabels(data.items as PlanItemResult[]);
+        roomLabels = reconciled.roomLabels;
+        data.items = mergePlanBands(reconciled.items);
       }
+      // If more than one room label survives reconciliation, this wasn't a
+      // clean single-room read — tell the estimator so they check the Room
+      // field on each item (editable below) before adding to the quote,
+      // rather than silently exporting a document split into sections that
+      // may really be the one room under two different names.
+      data.room_label_warning =
+        roomLabels.length > 1
+          ? `This read used more than one room name (${roomLabels
+              .map((r) => `"${r}"`)
+              .join(
+                ", "
+              )}) — if this plan is really just one room, check and correct the Room field on the items below before adding them, so they don't end up split across separate sections on the quote.`
+          : undefined;
       setPlanResult(data);
       // Only fill these in when the estimator hasn't already typed something
       // — the plan is a convenience, not an override of what's already on
@@ -1395,6 +1471,11 @@ export default function QuoteBuilder({
 
         {planResult && (
           <div className="mt-4">
+            {planResult.room_label_warning && (
+              <div className="bg-amber-50 border border-amber-300 rounded-md p-3 mb-3 text-xs text-amber-900">
+                ⚠ {planResult.room_label_warning}
+              </div>
+            )}
             {planResult.consistency_warnings && planResult.consistency_warnings.length > 0 && (
               <div className="bg-red-50 border border-red-300 rounded-md p-3 mb-3 text-xs text-red-800">
                 <span className="font-semibold">
@@ -1439,7 +1520,15 @@ export default function QuoteBuilder({
                         <div className="flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium">{it.name}</span>
-                            <span className="text-ink-soft">— {it.room} ·</span>
+                            <span className="text-ink-soft">—</span>
+                            <input
+                              type="text"
+                              className="w-28 px-1.5 py-0.5 text-sm border border-line-strong rounded"
+                              value={it.room}
+                              onChange={(e) => updatePlanItem(i, { room: e.target.value || "General" })}
+                              title="Room — edit if the AI mislabeled this (e.g. guessed 'Kitchen' instead of the real room name)"
+                            />
+                            <span className="text-ink-soft">·</span>
                             {/* Editable — the AI read gets very close on a complex
                                 multi-wall plan, but a vision read can land slightly
                                 off on one wall's measured length; fixing the number
