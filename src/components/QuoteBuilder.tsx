@@ -383,9 +383,23 @@ export default function QuoteBuilder({
     const keywords = materialKeywords(`${it.name} ${it.material_hint}`);
     if (keywords.length === 0) return [];
     const keywordSet = new Set(keywords);
+    // A literal width token (e.g. "400mm") is a far stronger signal than any
+    // ordinary word overlap — a bin, hamper, or any other width-coded fitting
+    // can have several price-book variants that only differ by width, so a
+    // generic product whose name happens to share a couple of plain words
+    // (e.g. "pull", "out", "bin") must never outrank one whose width actually
+    // matches the drawing. Without this, that's exactly what happened on a
+    // real test: "400mm Pull-Out Bin" matched a generic "Finista...pull out
+    // twin bin" instead of the price book's own "400mm Ninka 126 Bin".
+    const WIDTH_TOKEN = /^\d+mm$/;
     return priceBook
       .filter((p) => !(p.category.toLowerCase() === "hardware" && /^drawer -/i.test(p.name)))
-      .map((p) => ({ p, score: materialKeywords(`${p.category} ${p.name}`).filter((w) => keywordSet.has(w)).length }))
+      .map((p) => ({
+        p,
+        score: materialKeywords(`${p.category} ${p.name}`)
+          .filter((w) => keywordSet.has(w))
+          .reduce((sum, w) => sum + (WIDTH_TOKEN.test(w) ? 5 : 1), 0),
+      }))
       .filter((x) => x.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, 8)
@@ -455,11 +469,16 @@ export default function QuoteBuilder({
     if (hintWords.length === 0) return { match: null, exact: false };
     const hintSet = new Set(hintWords);
 
+    // Same width-token weighting as materialOptionsFor above, and for the
+    // same reason: this function does its own independent scoring pass over
+    // the shortlist, so without this it can still re-rank a generic product
+    // above the one whose width actually matches the drawing.
+    const WIDTH_TOKEN = /^\d+mm$/;
     let best: PriceBookItem | null = null;
     let bestScore = 0;
     for (const o of options) {
       const words = materialKeywords(o.name);
-      const score = words.filter((w) => hintSet.has(w)).length;
+      const score = words.filter((w) => hintSet.has(w)).reduce((sum, w) => sum + (WIDTH_TOKEN.test(w) ? 5 : 1), 0);
       if (score > bestScore) {
         bestScore = score;
         best = o;
