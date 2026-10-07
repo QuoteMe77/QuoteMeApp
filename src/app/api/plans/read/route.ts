@@ -603,6 +603,8 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
   return NextResponse.json({
     ...primary,
     walls,
+    column_source: fixedReads.length > 0 ? "pdf_text" : "ai_picture",
+    dim_note: typeof body?.dimNote === "string" ? body.dimNote.slice(0, 200) : "",
     consistency_warnings: [...consistencyWarnings, ...colWarnings],
   });
 }

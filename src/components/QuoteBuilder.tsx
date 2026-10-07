@@ -195,8 +195,8 @@ const OVERVIEW_COLORS = [
 // text layer, exactly and repeatably, so the AI never has to read tiny
 // numbers off a picture. Returns [] for scans/images with no text layer, in
 // which case the server falls back to the AI's own reading.
-async function extractDimensionStrings(file: File): Promise<DimensionString[]> {
-  if (!/pdf/i.test(file.type) && !/\.pdf$/i.test(file.name)) return [];
+async function extractDimensionStrings(file: File): Promise<{ strings: DimensionString[]; note: string }> {
+  if (!/pdf/i.test(file.type) && !/\.pdf$/i.test(file.name)) return { strings: [], note: "file is an image, not a PDF" };
   try {
     ensurePdfjsWorker();
     const data = await file.arrayBuffer();
@@ -231,10 +231,23 @@ async function extractDimensionStrings(file: File): Promise<DimensionString[]> {
       }
       out.push(...findDimensionStrings(words, i, viewport.width));
     }
-    return out;
+    // The same elevation can appear on two sheets (or twice on one) — keep
+    // each distinct dimension string once so it is never added up twice.
+    const seen = new Set<string>();
+    const unique = out.filter((d) => {
+      const key = `${d.overall}|${d.columns.map((c) => c.width).join(",")}`;
+      const rev = `${d.overall}|${d.columns.map((c) => c.width).reverse().join(",")}`;
+      if (seen.has(key) || seen.has(rev)) return false;
+      seen.add(key);
+      return true;
+    });
+    return {
+      strings: unique,
+      note: unique.length ? `found ${unique.length} dimension string(s) in the PDF text` : "no dimension strings found in the PDF text (scanned or outlined drawing?)",
+    };
   } catch (err) {
     console.error("Could not read dimension text from the PDF:", err);
-    return [];
+    return { strings: [], note: `PDF text reading failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200) };
   }
 }
 
@@ -484,6 +497,8 @@ export default function QuoteBuilder({
     room_label_warning?: string;
     column_report?: ColumnReport[];
     column_warnings?: string[];
+    column_source?: string;
+    dim_note?: string;
   } | null>(null);
   const [selectedPlanItems, setSelectedPlanItems] = useState<Set<number>>(new Set());
   // index -> chosen price_book_items.id for base/wall/tall items awaiting a material pick
@@ -1290,11 +1305,12 @@ export default function QuoteBuilder({
         }
       }
 
-      const dimensionStrings = await extractDimensionStrings(planFile);
+      const dim = await extractDimensionStrings(planFile);
+      const dimensionStrings = dim.strings;
       const res = await fetch("/api/plans/read", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planPath, schedulePath, dimensionStrings }),
+        body: JSON.stringify({ planPath, schedulePath, dimensionStrings, dimNote: dim.note }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -2120,6 +2136,13 @@ export default function QuoteBuilder({
                 <summary className="cursor-pointer font-medium">
                   Column breakdown — how base / wall / tall lengths were added up
                 </summary>
+                <p className="mt-2 text-ink-soft">
+                  Widths from:{" "}
+                  {planResult.column_source === "pdf_text"
+                    ? "the PDF's own text (exact)"
+                    : "the AI's reading of the picture (less reliable)"}
+                  {planResult.dim_note ? ` — ${planResult.dim_note}` : ""}
+                </p>
                 <div className="mt-2 space-y-3">
                   {planResult.column_report.map((w, wi) => (
                     <div key={wi}>
