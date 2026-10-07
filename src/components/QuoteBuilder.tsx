@@ -264,6 +264,22 @@ async function renderPlanOverview(
 
 type Calc = "LM" | "QTY" | "MISC";
 
+// One elevation's column inventory as transcribed by the AI (printed widths +
+// what kind of cabinetry each column is), plus what the application worked
+// out from it. The AI only copies figures; all adding-up happens in code.
+type ColumnReport = {
+  name: string;
+  room: string;
+  page: number;
+  overall: number;
+  sum: number;
+  ok: boolean;
+  columns: { width_mm: number; kind: string; label: string }[];
+  base: number;
+  wall: number;
+  tall: number;
+};
+
 type PriceBookItem = {
   id: string;
   calc: Calc;
@@ -417,6 +433,8 @@ export default function QuoteBuilder({
     flags: string[];
     consistency_warnings?: string[];
     room_label_warning?: string;
+    column_report?: ColumnReport[];
+    column_warnings?: string[];
   } | null>(null);
   const [selectedPlanItems, setSelectedPlanItems] = useState<Set<number>>(new Set());
   // index -> chosen price_book_items.id for base/wall/tall items awaiting a material pick
@@ -976,6 +994,126 @@ export default function QuoteBuilder({
     return merged;
   }
 
+  // Deterministic measuring: the model transcribes each elevation's column
+  // widths (printed figures) and what kind of cabinetry each column is; the
+  // base / wall / tall lm totals are then added up HERE, not by the model.
+  // Repeated real tests showed the model getting the arithmetic and the
+  // classification wrong at the same time (e.g. base and wall both coming out
+  // as the full wall width). A checksum — column widths must add up to the
+  // elevation's printed overall dimension — catches misread columns; a wall
+  // that fails it is NOT used to override anything and is flagged instead.
+  function applyColumnInventory(
+    items: PlanItemResult[],
+    walls:
+      | { room?: string; name?: string; page?: number; overall_mm?: number; columns?: { width_mm: number; kind: string; label?: string }[] }[]
+      | undefined
+  ): { items: PlanItemResult[]; report: ColumnReport[]; warnings: string[] } {
+    const report: ColumnReport[] = [];
+    const warnings: string[] = [];
+    if (!Array.isArray(walls) || walls.length === 0) return { items, report, warnings };
+
+    const lmItems = items.filter((it) => it.calc === "LM" && ["base", "wall", "tall"].includes(it.cabinet_type));
+    const itemRooms = Array.from(new Set(lmItems.map((it) => it.room.trim().toLowerCase())));
+
+    const totals = new Map<string, { base: number; wall: number; tall: number; parts: { base: string[]; wall: string[]; tall: string[] }; room: string }>();
+    for (const w of walls) {
+      const cols = (Array.isArray(w.columns) ? w.columns : []).map((c) => ({
+        width_mm: Number(c.width_mm) || 0,
+        kind: String(c.kind || "").toLowerCase(),
+        label: c.label || "",
+      }));
+      if (cols.length === 0) continue;
+      const sum = cols.reduce((a, c) => a + c.width_mm, 0);
+      const overall = Number(w.overall_mm) || 0;
+      const hasZero = cols.some((c) => c.width_mm <= 0 && c.kind !== "gap");
+      const ok = !hasZero && (overall > 0 ? Math.abs(sum - overall) / overall <= 0.02 : false);
+      const sumOf = (kinds: string[]) => cols.filter((c) => kinds.includes(c.kind)).reduce((a, c) => a + c.width_mm, 0);
+      const rep: ColumnReport = {
+        name: w.name || "Wall",
+        room: w.room || "",
+        page: Number(w.page) || 0,
+        overall,
+        sum,
+        ok,
+        columns: cols,
+        base: sumOf(["base", "base_wall"]),
+        wall: sumOf(["base_wall", "wall"]),
+        tall: sumOf(["tall"]),
+      };
+      report.push(rep);
+      if (!ok) {
+        warnings.push(
+          `${rep.name}: the column widths (${cols.map((c) => c.width_mm).join(" + ")} = ${sum}mm) don't add up to the printed overall ${
+            overall || "(none printed)"
+          }mm — a column was probably misread or missed, so the measured lengths for this wall were NOT applied. Check it against the drawing.`
+        );
+        continue;
+      }
+      // Which room does this wall belong to?
+      let roomKey = (w.room || "").trim().toLowerCase();
+      if (!itemRooms.includes(roomKey)) roomKey = itemRooms.length === 1 ? itemRooms[0] : roomKey;
+      const t =
+        totals.get(roomKey) ||
+        { base: 0, wall: 0, tall: 0, parts: { base: [], wall: [], tall: [] }, room: roomKey };
+      t.base += rep.base;
+      t.wall += rep.wall;
+      t.tall += rep.tall;
+      const widths = (kinds: string[]) => cols.filter((c) => kinds.includes(c.kind)).map((c) => c.width_mm).join(" + ");
+      if (rep.base > 0) t.parts.base.push(`${rep.name}: ${widths(["base", "base_wall"])}`);
+      if (rep.wall > 0) t.parts.wall.push(`${rep.name}: ${widths(["base_wall", "wall"])}`);
+      if (rep.tall > 0) t.parts.tall.push(`${rep.name}: ${widths(["tall"])}`);
+      totals.set(roomKey, t);
+    }
+
+    let out = [...items];
+    for (const [roomKey, t] of totals) {
+      for (const type of ["base", "wall", "tall"] as const) {
+        const metres = Math.round(t[type]) / 1000;
+        const existingIdx = out.findIndex(
+          (it) => it.calc === "LM" && it.cabinet_type === type && it.room.trim().toLowerCase() === roomKey
+        );
+        const colNote = t.parts[type].length > 0 ? `columns (mm) — ${t.parts[type].join("; ")}` : "";
+        if (metres > 0 && existingIdx >= 0) {
+          const it = out[existingIdx];
+          const aiQty = it.qty;
+          const diff = Math.abs(aiQty - metres) > 0.01 ? ` (AI's own figure was ${aiQty}; replaced by the column sum)` : "";
+          out[existingIdx] = {
+            ...it,
+            qty: metres,
+            note: [it.note, colNote + diff].filter(Boolean).join("; "),
+            duplicate_wall_warning: undefined,
+          };
+        } else if (metres > 0) {
+          const template =
+            out.find((it) => it.calc === "LM" && it.room.trim().toLowerCase() === roomKey && it.cabinet_type === "base") ||
+            out.find((it) => it.calc === "LM" && it.room.trim().toLowerCase() === roomKey);
+          if (template) {
+            out.push({
+              ...template,
+              name: type === "base" ? "Base cabinet" : type === "wall" ? "Wall cabinet" : "Tall cabinet",
+              cabinet_type: type,
+              qty: metres,
+              unit: "lm",
+              open: false,
+              drawer_count: 0,
+              pto_drawer_count: 0,
+              drawer_brand: "",
+              note: `${colNote} (added from the column inventory — the AI hadn't listed this item)`,
+              confidence: "medium",
+              duplicate_wall_warning: undefined,
+              regions: [],
+            });
+          }
+        } else if (existingIdx >= 0) {
+          warnings.push(
+            `The column inventory found no ${type} columns, but a ${type} cabinet item was listed (${out[existingIdx].qty} lm) — check it.`
+          );
+        }
+      }
+    }
+    return { items: out, report, warnings };
+  }
+
   // Another deterministic cross-check, not a prompt tweak: a real test on the
   // Imola Pantry plan showed Wall cabinets come out to the exact same figure
   // as Base cabinets in the same room (3.758 both), which is the tell for the
@@ -1112,7 +1250,11 @@ export default function QuoteBuilder({
       if (Array.isArray(data.items)) {
         const reconciled = reconcileRoomLabels(data.items as PlanItemResult[]);
         roomLabels = reconciled.roomLabels;
-        data.items = flagMatchingBandLengths(mergePlanBands(reconciled.items));
+        const merged = mergePlanBands(reconciled.items);
+        const inv = applyColumnInventory(merged, data.walls);
+        data.items = flagMatchingBandLengths(inv.items);
+        data.column_report = inv.report;
+        data.column_warnings = inv.warnings;
       }
       // If more than one room label survives reconciliation, this wasn't a
       // clean single-room read — tell the estimator so they check the Room
@@ -1903,6 +2045,46 @@ export default function QuoteBuilder({
               <div className="bg-amber-50 border border-amber-300 rounded-md p-3 mb-3 text-xs text-amber-900">
                 ⚠ {planResult.room_label_warning}
               </div>
+            )}
+            {planResult.column_warnings && planResult.column_warnings.length > 0 && (
+              <div className="bg-amber-50 border border-amber-300 rounded-md p-3 mb-3 text-xs text-amber-900">
+                <ul className="list-disc pl-4 space-y-0.5">
+                  {planResult.column_warnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {planResult.column_report && planResult.column_report.length > 0 && (
+              <details className="border border-line rounded-md p-3 mb-3 text-xs">
+                <summary className="cursor-pointer font-medium">
+                  Column breakdown — how base / wall / tall lengths were added up
+                </summary>
+                <div className="mt-2 space-y-3">
+                  {planResult.column_report.map((w, wi) => (
+                    <div key={wi}>
+                      <p className="font-medium">
+                        {w.name} (page {w.page}) — columns add to {w.sum}mm, printed overall {w.overall || "—"}mm{" "}
+                        {w.ok ? "✓" : "⚠ doesn't match"}
+                      </p>
+                      <table className="mt-1 w-full">
+                        <tbody>
+                          {w.columns.map((c, ci) => (
+                            <tr key={ci} className="border-t border-line">
+                              <td className="py-0.5 pr-3 text-right tabular-nums">{c.width_mm}</td>
+                              <td className="py-0.5 pr-3">{c.kind}</td>
+                              <td className="py-0.5 text-ink-soft">{c.label}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <p className="mt-1 text-ink-soft">
+                        Base {w.base / 1000} lm · Wall {w.wall / 1000} lm · Tall {w.tall / 1000} lm
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </details>
             )}
             {planResult.consistency_warnings && planResult.consistency_warnings.length > 0 && (
               <div className="bg-red-50 border border-red-300 rounded-md p-3 mb-3 text-xs text-red-800">

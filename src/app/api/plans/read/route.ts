@@ -82,6 +82,18 @@ For each item, return:
     1. A box that falls in blank margin — empty white space below, above, or beside the drawing, where there is no cabinetry line, door, shelf, or label at all inside the box. If what you're about to report contains no actual drawing content, you have the wrong position; find the band that actually shows this item and box that instead.
     2. A box that swallows more than one band — a wall-cabinet box must stop at the bench-height line and never reach down into the base band below it; a base-cabinet box must stop at that same line and never reach up into the wall band above it. If the box you're about to report is taller than roughly a third of the whole elevation's height, you have almost certainly merged two bands into one box — split it down to just the one band this item actually is.
 
+Also return a top-level "walls" array — a COLUMN INVENTORY, one entry per distinct FRONT elevation of joinery (never a side/end/detail view, never a 3D sketch). This is a transcription job, not a calculation job: your only task here is to copy printed dimensions and say what kind of cabinetry each column is; the application does all the adding up. For each wall return:
+  - "room": the same room string used on the items; "name": the wall's one consistent name; "page": the 1-indexed page it is drawn on.
+  - "overall_mm": the overall dimension printed for the whole elevation, in mm (0 if none is printed).
+  - "columns": every column along that elevation from left to right, each { "width_mm": N, "kind": "...", "label": "..." } where width_mm is copied exactly from the individual figures printed in the dimension string along the bottom of the elevation (the figures between the tick marks — include the small spacer/filler figures too, as kind "gap"), never estimated or computed, and kind is exactly one of:
+      "base" — a base band (floor to benchtop height) with nothing counted above it; includes sink, bin, hamper, dishwasher/dish-drawer and drawer sections inside a base row;
+      "base_wall" — a base band with a wall-cabinet band above it in the same column;
+      "wall" — a wall band only, with no base band under it;
+      "tall" — one unbroken floor-to-ceiling column, INCLUDING any integrated fridge/freezer column (the appliance section and the doors above it together);
+      "gap" — a small spacer, filler, end panel, or any column that is not joinery.
+    "label" is any text printed in or on that column (e.g. the appliance or fitting label) — copy it, or empty.
+  The column widths you list must be the real printed figures so that, with the gaps, they add up to the elevation's overall dimension. Do not invent a figure to make them add up — if a column's width is not printed, set width_mm to 0 and add a flag.
+
 Also return a top-level "flags" array — short strings for anything to double-check (illegible dimensions, unmatched tags, contradictions, unquantifiable scope).
 
 Also check the title block for "client_name" (the customer, e.g. a "CUSTOMER" field) and "job_address" (street address + suburb/postcode if both given, e.g. "29 Duxford Street, Elizabeth Hills 2171"). Leave either empty if not stated — never guess.
@@ -91,6 +103,7 @@ Respond with ONLY a JSON object of this exact shape, no other text:
   "client_name": "",
   "job_address": "",
   "items": [ { "room": "...", "name": "...", "cabinet_type": "base", "open": false, "calc": "LM", "qty": 0, "unit": "lm", "material_hint": "", "drawer_count": 0, "pto_drawer_count": 0, "drawer_brand": "", "note": "...", "confidence": "medium", "regions": [ { "page": 1, "bbox": [0.1, 0.2, 0.9, 0.4] } ] } ],
+  "walls": [ { "room": "...", "name": "...", "page": 1, "overall_mm": 0, "columns": [ { "width_mm": 0, "kind": "base_wall", "label": "" } ] } ],
   "flags": [ "..." ]
 }`;
 
@@ -221,7 +234,13 @@ export async function POST(request: NextRequest) {
     () => {}
   );
 
-  type ParsedPlan = { client_name?: string; job_address?: string; items: PlanItem[]; flags: string[] };
+  type ParsedPlan = {
+    client_name?: string;
+    job_address?: string;
+    items: PlanItem[];
+    flags: string[];
+    walls?: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[] }[];
+  };
 
   // A single vision read of a complex multi-page plan isn't deterministic —
   // the same file can come back with a different wall measurement on two
