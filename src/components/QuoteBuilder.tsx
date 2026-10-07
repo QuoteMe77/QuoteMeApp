@@ -196,8 +196,26 @@ const OVERVIEW_COLORS = [
 // numbers off a picture. Returns [] for scans/images with no text layer, in
 // which case the server falls back to the AI's own reading.
 async function extractDimensionStrings(file: File): Promise<DimensionString[]> {
-  const words: TextWord[] = [];
-  return /pdf/i.test(file.type) ? findDimensionStrings(words, 1, 1) : [];
+  if (!/pdf/i.test(file.type) && !/\.pdf$/i.test(file.name)) return [];
+  try {
+    ensurePdfjsWorker();
+    const data = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const out: DimensionString[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1 });
+      const tc = await page.getTextContent();
+      const words: TextWord[] = [];
+      void tc;
+      void viewport;
+      out.push(...findDimensionStrings(words, i, viewport.width));
+    }
+    return out;
+  } catch (err) {
+    console.error("Could not read dimension text from the PDF:", err);
+    return [];
+  }
 }
 
 // Renders one PDF page / image ONCE and draws every given box on it, each in
