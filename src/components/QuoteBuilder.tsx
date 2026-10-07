@@ -796,6 +796,50 @@ export default function QuoteBuilder({
     return merged;
   }
 
+  // Another deterministic cross-check, not a prompt tweak: a real test on the
+  // Imola Pantry plan showed Wall cabinets come out to the exact same figure
+  // as Base cabinets in the same room (3.758 both), which is the tell for the
+  // model having copied one band's width onto the other rather than measuring
+  // the wall band's own extent — base and wall almost never span the identical
+  // width in practice, since appliances, end panels, and windows typically
+  // interrupt one band but not the other. Flag it rather than silently
+  // trusting it.
+  function flagMatchingBandLengths(items: PlanItemResult[]): PlanItemResult[] {
+    const byRoom = new Map<string, PlanItemResult[]>();
+    for (const it of items) {
+      if (it.calc !== "LM") continue;
+      if (it.cabinet_type !== "base" && it.cabinet_type !== "wall" && it.cabinet_type !== "tall") continue;
+      const key = it.room.trim().toLowerCase();
+      const arr = byRoom.get(key) || [];
+      arr.push(it);
+      byRoom.set(key, arr);
+    }
+    const flagged = new Set<PlanItemResult>();
+    for (const group of byRoom.values()) {
+      for (let i = 0; i < group.length; i++) {
+        for (let j = i + 1; j < group.length; j++) {
+          const a = group[i];
+          const b = group[j];
+          if (a.qty > 0 && Math.abs(a.qty - b.qty) < 0.001) {
+            flagged.add(a);
+            flagged.add(b);
+          }
+        }
+      }
+    }
+    if (flagged.size === 0) return items;
+    return items.map((it) =>
+      flagged.has(it)
+        ? {
+            ...it,
+            duplicate_wall_warning: it.duplicate_wall_warning
+              ? `${it.duplicate_wall_warning} Also: this came out the exact same length as another band in the same room — check it wasn't copied from that band instead of measured on its own.`
+              : "This came out the exact same length as another band (base/wall/tall) in the same room — check it wasn't copied from that band instead of measured on its own.",
+          }
+        : it
+    );
+  }
+
   type PdfPicker = {
     target: "plan" | "schedule";
     file: File;
@@ -888,7 +932,7 @@ export default function QuoteBuilder({
       if (Array.isArray(data.items)) {
         const reconciled = reconcileRoomLabels(data.items as PlanItemResult[]);
         roomLabels = reconciled.roomLabels;
-        data.items = mergePlanBands(reconciled.items);
+        data.items = flagMatchingBandLengths(mergePlanBands(reconciled.items));
       }
       // If more than one room label survives reconciliation, this wasn't a
       // clean single-room read — tell the estimator so they check the Room
