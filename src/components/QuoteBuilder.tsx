@@ -205,9 +205,7 @@ async function extractDimensionStrings(file: File): Promise<DimensionString[]> {
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const viewport = page.getViewport({ scale: 1 });
-      const tc = await page.getTextContent();
       const words: TextWord[] = [];
-      void tc;
       void viewport;
       out.push(...findDimensionStrings(words, i, viewport.width));
     }
