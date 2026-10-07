@@ -354,6 +354,7 @@ export default function QuoteBuilder({
     imageUrl: string | null;
     loading: boolean;
     error: string | null;
+    suspect: boolean;
   } | null>(null);
   const scheduleFileRef = useRef<File | null>(null);
 
@@ -624,6 +625,29 @@ export default function QuoteBuilder({
     return { items: reconciled, roomLabels };
   }
 
+  // Deterministic cross-check, not another prompt tweak: real tests kept showing
+  // the same pattern — most items on a page get a tight, correct box, but one or
+  // two land in the blank gap below the actual drawing (above the title block),
+  // even though the prompt explicitly says not to box blank space. Rather than
+  // trust the model to police itself here, compare each item's box against
+  // where every OTHER item on the same page landed; one sitting well below the
+  // rest is almost certainly in that blank gap, not on real cabinetry.
+  function isRegionSuspect(page: number, bbox: [number, number, number, number]): boolean {
+    if (!planResult) return false;
+    const otherBottoms: number[] = [];
+    for (const it of planResult.items) {
+      for (const r of it.regions || []) {
+        if (r.page === page && r.bbox !== bbox) otherBottoms.push(r.bbox[3]);
+      }
+    }
+    if (otherBottoms.length < 2) return false; // not enough on this page to compare against
+    const sorted = [...otherBottoms].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    // This box starts noticeably below where most other items on the page ended.
+    return bbox[1] - median > 0.12;
+  }
+
   async function showRegionAt(itemName: string, regions: { page: number; bbox: [number, number, number, number] }[], index: number) {
     if (!lastPlanFile) {
       setRegionPreview({
@@ -633,10 +657,12 @@ export default function QuoteBuilder({
         imageUrl: null,
         loading: false,
         error: "The plan file isn't available anymore in this session — re-upload the plan to use this preview.",
+        suspect: false,
       });
       return;
     }
-    setRegionPreview({ itemName, regions, index, imageUrl: null, loading: true, error: null });
+    const suspect = isRegionSuspect(regions[index].page, regions[index].bbox);
+    setRegionPreview({ itemName, regions, index, imageUrl: null, loading: true, error: null, suspect });
     try {
       const url = await renderPlanRegionPreview(lastPlanFile, regions[index].page, regions[index].bbox);
       setRegionPreview((prev) => (prev ? { ...prev, imageUrl: url, loading: false } : prev));
@@ -1851,6 +1877,12 @@ export default function QuoteBuilder({
             </div>
             {regionPreview.loading && <p className="text-sm text-ink-soft py-8 text-center">Rendering page…</p>}
             {regionPreview.error && <p className="text-sm text-brick py-8 text-center">{regionPreview.error}</p>}
+            {regionPreview.suspect && !regionPreview.loading && !regionPreview.error && (
+              <p className="text-xs font-medium text-brick bg-paper border border-brick rounded px-2 py-1.5 mb-2">
+                ⚠ This box sits well below where the rest of this page's items were found — it's likely landed in
+                blank space rather than on the real cabinetry. Check the drawing yourself for this one.
+              </p>
+            )}
             {regionPreview.imageUrl && (
               <img src={regionPreview.imageUrl} alt="Plan region" className="max-w-full rounded border border-line" />
             )}
