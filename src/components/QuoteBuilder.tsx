@@ -8,6 +8,8 @@ import { downloadQuotePdf } from "@/lib/exportPdf";
 import { downloadQuoteDocx } from "@/lib/exportDocx";
 import { PDFDocument } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist";
+import { findDimensionStrings } from "@/lib/dimensionRows";
+import type { DimensionString, TextWord } from "@/lib/dimensionRows";
 
 // Above this size, a PDF is routed through the page-picker instead of being
 // uploaded whole — a full multi-trade construction document set can run to
@@ -188,6 +190,52 @@ const OVERVIEW_COLORS = [
   "#e11d48", "#2563eb", "#16a34a", "#d97706", "#7c3aed",
   "#0891b2", "#db2777", "#65a30d", "#ea580c", "#4b5563",
 ];
+
+// Pulls the printed dimension strings (column widths) out of the PDF's own
+// text layer, exactly and repeatably, so the AI never has to read tiny
+// numbers off a picture. Returns [] for scans/images with no text layer, in
+// which case the server falls back to the AI's own reading.
+async function extractDimensionStrings(file: File): Promise<DimensionString[]> {
+  if (!/pdf/i.test(file.type) && !/\.pdf$/i.test(file.name)) return [];
+  try {
+    ensurePdfjsWorker();
+    const data = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const out: DimensionString[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1 });
+      const tc = await page.getTextContent();
+      const words: TextWord[] = [];
+      for (const raw of tc.items as unknown as { str?: string; transform: number[]; width: number; height: number }[]) {
+        const str = (raw.str || "").trim();
+        if (!str) continue;
+        const tr = raw.transform;
+        const e = tr[4];
+        const f = tr[5];
+        const rotated = Math.abs(tr[1]) > 0.01 && Math.abs(tr[1]) >= Math.abs(tr[0]);
+        const y = viewport.height - f - (raw.height || 0) / 2;
+        const parts = str.split(/\s+/);
+        if (parts.length > 1 && parts.every((t) => /^\d+(\.\d+)?$/.test(t))) {
+          // several figures in one text run: split by character share
+          const total = parts.reduce((n, t) => n + t.length + 1, -1);
+          let cursor = 0;
+          for (const t of parts) {
+            words.push({ str: t, x: e + (raw.width * cursor) / total, y, w: (raw.width * t.length) / total, rotated });
+            cursor += t.length + 1;
+          }
+        } else {
+          words.push({ str, x: e, y, w: raw.width, rotated });
+        }
+      }
+      out.push(...findDimensionStrings(words, i, viewport.width));
+    }
+    return out;
+  } catch (err) {
+    console.error("Could not read dimension text from the PDF:", err);
+    return [];
+  }
+}
 
 // Renders one PDF page / image ONCE and draws every given box on it, each in
 // its own colour with a numbered tag — the numbers match a legend shown under
@@ -1241,10 +1289,11 @@ export default function QuoteBuilder({
         }
       }
 
+      const dimensionStrings = await extractDimensionStrings(planFile);
       const res = await fetch("/api/plans/read", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planPath, schedulePath }),
+        body: JSON.stringify({ planPath, schedulePath, dimensionStrings }),
       });
       const data = await res.json();
       if (!res.ok) {
