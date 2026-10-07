@@ -196,45 +196,8 @@ const OVERVIEW_COLORS = [
 // numbers off a picture. Returns [] for scans/images with no text layer, in
 // which case the server falls back to the AI's own reading.
 async function extractDimensionStrings(file: File): Promise<DimensionString[]> {
-  if (!/pdf/i.test(file.type) && !/\.pdf$/i.test(file.name)) return [];
-  try {
-    ensurePdfjsWorker();
-    const data = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data }).promise;
-    const out: DimensionString[] = [];
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const viewport = page.getViewport({ scale: 1 });
-      const tc = await page.getTextContent();
-      const words: TextWord[] = [];
-      for (const raw of tc.items as unknown as { str?: string; transform: number[]; width: number; height: number }[]) {
-        const str = (raw.str || "").trim();
-        if (!str) continue;
-        const tr = raw.transform;
-        const e = tr[4];
-        const f = tr[5];
-        const rotated = Math.abs(tr[1]) > 0.01 && Math.abs(tr[1]) >= Math.abs(tr[0]);
-        const y = viewport.height - f - (raw.height || 0) / 2;
-        const parts = str.split(/\s+/);
-        if (parts.length > 1 && parts.every((t) => /^\d+(\.\d+)?$/.test(t))) {
-          // several figures in one text run: split by character share
-          const total = parts.reduce((n, t) => n + t.length + 1, -1);
-          let cursor = 0;
-          for (const t of parts) {
-            words.push({ str: t, x: e + (raw.width * cursor) / total, y, w: (raw.width * t.length) / total, rotated });
-            cursor += t.length + 1;
-          }
-        } else {
-          words.push({ str, x: e, y, w: raw.width, rotated });
-        }
-      }
-      out.push(...findDimensionStrings(words, i, viewport.width));
-    }
-    return out;
-  } catch (err) {
-    console.error("Could not read dimension text from the PDF:", err);
-    return [];
-  }
+  const words: TextWord[] = [];
+  return /pdf/i.test(file.type) ? findDimensionStrings(words, 1, 1) : [];
 }
 
 // Renders one PDF page / image ONCE and draws every given box on it, each in
