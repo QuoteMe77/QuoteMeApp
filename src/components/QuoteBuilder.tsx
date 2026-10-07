@@ -182,6 +182,86 @@ async function renderPlanRegionPreview(
   return canvas.toDataURL("image/jpeg", 0.85);
 }
 
+// Distinct outline colours for the "View all on plan" overview, so several
+// items' boxes can share one page image and still be told apart.
+const OVERVIEW_COLORS = [
+  "#e11d48", "#2563eb", "#16a34a", "#d97706", "#7c3aed",
+  "#0891b2", "#db2777", "#65a30d", "#ea580c", "#4b5563",
+];
+
+// Renders one PDF page / image ONCE and draws every given box on it, each in
+// its own colour with a numbered tag — the numbers match a legend shown under
+// the image. Used by "View all on plan" so every item can be checked (and
+// screenshotted) in a single view instead of opening each item one by one.
+async function renderPlanOverview(
+  file: File,
+  page: number,
+  boxes: { n: number; bbox: [number, number, number, number] }[]
+): Promise<string> {
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+  const canvas = document.createElement("canvas");
+  let ctx: CanvasRenderingContext2D | null;
+
+  if (isPdf) {
+    ensurePdfjsWorker();
+    const data = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const pageIndex = Math.min(Math.max(page, 1), pdf.numPages);
+    const pdfPage = await pdf.getPage(pageIndex);
+    const baseViewport = pdfPage.getViewport({ scale: 1 });
+    const scale = Math.min(2.5, 1600 / baseViewport.width);
+    const viewport = pdfPage.getViewport({ scale });
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    ctx = canvas.getContext("2d");
+    if (ctx) await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+    pdfPage.cleanup();
+  } else {
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.src = objectUrl;
+      await img.decode();
+      const scale = Math.min(2.5, 1600 / img.width);
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      ctx = canvas.getContext("2d");
+      if (ctx) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  if (ctx) {
+    const fontPx = Math.max(14, Math.round(canvas.width * 0.014));
+    ctx.font = `bold ${fontPx}px sans-serif`;
+    ctx.textBaseline = "middle";
+    for (const { n, bbox } of boxes) {
+      const color = OVERVIEW_COLORS[(n - 1) % OVERVIEW_COLORS.length];
+      const [x0, y0, x1, y1] = bbox;
+      const bx = Math.max(0, Math.min(1, x0)) * canvas.width;
+      const by = Math.max(0, Math.min(1, y0)) * canvas.height;
+      const bw = Math.max(0, Math.min(1, x1) - Math.min(1, Math.max(0, x0))) * canvas.width;
+      const bh = Math.max(0, Math.min(1, y1) - Math.min(1, Math.max(0, y0))) * canvas.height;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(2, canvas.width * 0.003);
+      ctx.strokeRect(bx, by, bw, bh);
+      // Numbered tag in the box's top-left corner.
+      const label = String(n);
+      const tagW = ctx.measureText(label).width + fontPx * 0.8;
+      const tagH = fontPx * 1.4;
+      ctx.fillStyle = color;
+      ctx.fillRect(bx, by, tagW, tagH);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(label, bx + fontPx * 0.4, by + tagH / 2);
+      ctx.restore();
+    }
+  }
+
+  return canvas.toDataURL("image/jpeg", 0.85);
+}
+
 type Calc = "LM" | "QTY" | "MISC";
 
 type PriceBookItem = {
@@ -355,6 +435,15 @@ export default function QuoteBuilder({
     loading: boolean;
     error: string | null;
     suspect: boolean;
+  } | null>(null);
+  // "View all on plan": every item's box drawn together, one image per page,
+  // with a numbered legend — one click instead of opening items one by one.
+  const [overview, setOverview] = useState<{
+    loading: boolean;
+    error: string | null;
+    pages: { page: number; imageUrl: string | null; error: string | null }[];
+    legend: { n: number; name: string; qty: string; page: number; suspect: boolean }[];
+    noRegions: string[]; // items that came back with no box at all
   } | null>(null);
   const scheduleFileRef = useRef<File | null>(null);
 
@@ -711,6 +800,78 @@ export default function QuoteBuilder({
 
   function closeRegionPreview() {
     setRegionPreview(null);
+  }
+
+  // One click: draw every item's box on its page, colour-coded and numbered,
+  // and show the pages together with a legend. Only the first region of each
+  // item is drawn (an item drawn on several pages appears on each of them).
+  async function openAllRegions() {
+    if (!planResult) return;
+    if (!lastPlanFile) {
+      setOverview({
+        loading: false,
+        error: "The plan file isn't available anymore in this session — re-upload the plan to use this view.",
+        pages: [],
+        legend: [],
+        noRegions: [],
+      });
+      return;
+    }
+    const legend: { n: number; name: string; qty: string; page: number; suspect: boolean }[] = [];
+    const byPage = new Map<number, { n: number; bbox: [number, number, number, number] }[]>();
+    const noRegions: string[] = [];
+    let n = 0;
+    for (const it of planResult.items) {
+      if (!it.regions || it.regions.length === 0) {
+        noRegions.push(it.name);
+        continue;
+      }
+      n += 1;
+      const qty = it.calc === "LM" ? `${it.qty} ${it.unit || "lm"}` : `${it.qty} ${it.unit || "ea"}`;
+      const primaryPage = it.regions[0].page;
+      legend.push({
+        n,
+        name: it.name,
+        qty,
+        page: primaryPage,
+        suspect: it.regions.some((r) => isRegionSuspect(r.page, r.bbox)),
+      });
+      for (const r of it.regions) {
+        const arr = byPage.get(r.page) || [];
+        arr.push({ n, bbox: r.bbox });
+        byPage.set(r.page, arr);
+      }
+    }
+    const pageNumbers = Array.from(byPage.keys()).sort((a, b) => a - b);
+    setOverview({
+      loading: true,
+      error: null,
+      pages: pageNumbers.map((p) => ({ page: p, imageUrl: null, error: null })),
+      legend,
+      noRegions,
+    });
+    for (const p of pageNumbers) {
+      try {
+        const url = await renderPlanOverview(lastPlanFile, p, byPage.get(p)!);
+        setOverview((prev) =>
+          prev ? { ...prev, pages: prev.pages.map((pg) => (pg.page === p ? { ...pg, imageUrl: url } : pg)) } : prev
+        );
+      } catch (err) {
+        setOverview((prev) =>
+          prev
+            ? {
+                ...prev,
+                pages: prev.pages.map((pg) =>
+                  pg.page === p
+                    ? { ...pg, error: err instanceof Error ? err.message : "Could not render this page." }
+                    : pg
+                ),
+              }
+            : prev
+        );
+      }
+    }
+    setOverview((prev) => (prev ? { ...prev, loading: false } : prev));
   }
 
   function mergePlanBands(items: PlanItemResult[]): PlanItemResult[] {
@@ -1490,6 +1651,7 @@ export default function QuoteBuilder({
     setScheduleFileName(null);
     setLastPlanFile(null);
     setRegionPreview(null);
+    setOverview(null);
     setPlanError(null);
     setSaveError(null);
     setSavedNotice(false);
@@ -1889,7 +2051,14 @@ export default function QuoteBuilder({
                     );
                   })}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={openAllRegions}
+                    className="border border-line-strong rounded-md px-3 py-1.5 text-sm hover:bg-paper"
+                    title="Show every item's box on the plan together — handy for one screenshot"
+                  >
+                    📍 View all on plan
+                  </button>
                   <button
                     onClick={addSelectedPlanItems}
                     disabled={selectedPlanItems.size === 0}
@@ -1917,6 +2086,66 @@ export default function QuoteBuilder({
           </div>
         )}
       </section>
+
+      {overview && (
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-auto"
+          onClick={() => setOverview(null)}
+        >
+          <div
+            className="bg-paper-raised rounded-lg p-4 max-w-5xl w-full my-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3 gap-3">
+              <span className="font-medium text-sm">All items on the plan</span>
+              <button onClick={() => setOverview(null)} className="text-ink-soft hover:text-ink text-lg leading-none">
+                ✕
+              </button>
+            </div>
+            {overview.error && <p className="text-sm text-brick py-6 text-center">{overview.error}</p>}
+            {overview.loading && <p className="text-xs text-ink-soft mb-2">Rendering pages…</p>}
+            {overview.legend.length > 0 && (
+              <ol className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 mb-3 text-sm">
+                {overview.legend.map((l) => (
+                  <li key={l.n} className="flex items-center gap-2">
+                    <span
+                      className="inline-flex items-center justify-center w-5 h-5 rounded text-[11px] font-bold text-white shrink-0"
+                      style={{ background: OVERVIEW_COLORS[(l.n - 1) % OVERVIEW_COLORS.length] }}
+                    >
+                      {l.n}
+                    </span>
+                    <span>
+                      {l.name} — {l.qty}
+                      {l.suspect && <span className="text-brick"> ⚠ box looks misplaced</span>}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {overview.noRegions.length > 0 && (
+              <p className="text-xs text-ink-soft mb-3">
+                No box was reported for: {overview.noRegions.join(", ")}.
+              </p>
+            )}
+            <div className="space-y-4">
+              {overview.pages.map((pg) => (
+                <div key={pg.page}>
+                  <p className="text-xs text-ink-soft mb-1">Page {pg.page}</p>
+                  {pg.error && <p className="text-sm text-brick">{pg.error}</p>}
+                  {!pg.imageUrl && !pg.error && <p className="text-sm text-ink-soft py-6 text-center">Rendering…</p>}
+                  {pg.imageUrl && (
+                    <img src={pg.imageUrl} alt={`Plan page ${pg.page}`} className="max-w-full rounded border border-line" />
+                  )}
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-ink-soft mt-3">
+              Boxes are the AI&apos;s own best guess at where it read each item — a visual cross-check, not a verified
+              measurement.
+            </p>
+          </div>
+        </div>
+      )}
 
       {regionPreview && (
         <div
