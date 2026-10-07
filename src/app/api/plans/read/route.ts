@@ -82,18 +82,6 @@ For each item, return:
     1. A box that falls in blank margin — empty white space below, above, or beside the drawing, where there is no cabinetry line, door, shelf, or label at all inside the box. If what you're about to report contains no actual drawing content, you have the wrong position; find the band that actually shows this item and box that instead.
     2. A box that swallows more than one band — a wall-cabinet box must stop at the bench-height line and never reach down into the base band below it; a base-cabinet box must stop at that same line and never reach up into the wall band above it. If the box you're about to report is taller than roughly a third of the whole elevation's height, you have almost certainly merged two bands into one box — split it down to just the one band this item actually is.
 
-Also return a top-level "walls" array — a COLUMN INVENTORY, one entry per distinct FRONT elevation of joinery (never a side/end/detail view, never a 3D sketch). This is a transcription job, not a calculation job: your only task here is to copy printed dimensions and say what kind of cabinetry each column is; the application does all the adding up. For each wall return:
-  - "room": the same room string used on the items; "name": the wall's one consistent name; "page": the 1-indexed page it is drawn on.
-  - "overall_mm": the overall dimension printed for the whole elevation, in mm (0 if none is printed).
-  - "columns": every column along that elevation from left to right, each { "width_mm": N, "kind": "...", "label": "..." } where width_mm is copied exactly from the individual figures printed in the dimension string along the bottom of the elevation (the figures between the tick marks — include the small spacer/filler figures too, as kind "gap"), never estimated or computed, and kind is exactly one of:
-      "base" — a base band (floor to benchtop height) with nothing counted above it; includes sink, bin, hamper, dishwasher/dish-drawer and drawer sections inside a base row;
-      "base_wall" — a base band with a wall-cabinet band above it in the same column. ONLY use this when wall-cabinet doors/boxes/shelves are actually DRAWN above the benchtop in that very column. A column whose upper part is blank or open (sink with splashback, window, rangehood space, a notation such as "SINK", "MIXER" or a splashback dimension) is "base", NOT "base_wall" — a tall elevation bracket spanning blank wall is not a wall cabinet. Look at each column individually: if you cannot point to wall doors above it, it is "base";
-      "wall" — a wall band only, with no base band under it;
-      "tall" — one unbroken floor-to-ceiling column, INCLUDING any integrated fridge/freezer column (the appliance section and the doors above it together);
-      "gap" — a small spacer, filler, end panel, or any column that is not joinery.
-    "label" is any text printed in or on that column (e.g. the appliance or fitting label) — copy it, or empty.
-  The column widths you list must be the real printed figures so that, with the gaps, they add up to the elevation's overall dimension. Do not invent a figure to make them add up — if a column's width is not printed, set width_mm to 0 and add a flag.
-
 Also return a top-level "flags" array — short strings for anything to double-check (illegible dimensions, unmatched tags, contradictions, unquantifiable scope).
 
 Also check the title block for "client_name" (the customer, e.g. a "CUSTOMER" field) and "job_address" (street address + suburb/postcode if both given, e.g. "29 Duxford Street, Elizabeth Hills 2171"). Leave either empty if not stated — never guess.
@@ -103,7 +91,6 @@ Respond with ONLY a JSON object of this exact shape, no other text:
   "client_name": "",
   "job_address": "",
   "items": [ { "room": "...", "name": "...", "cabinet_type": "base", "open": false, "calc": "LM", "qty": 0, "unit": "lm", "material_hint": "", "drawer_count": 0, "pto_drawer_count": 0, "drawer_brand": "", "note": "...", "confidence": "medium", "regions": [ { "page": 1, "bbox": [0.1, 0.2, 0.9, 0.4] } ] } ],
-  "walls": [ { "room": "...", "name": "...", "page": 1, "overall_mm": 0, "columns": [ { "width_mm": 0, "kind": "base_wall", "label": "" } ] } ],
   "flags": [ "..." ]
 }`;
 
@@ -132,6 +119,23 @@ type PlanItem = {
  * — here the API key is the platform's own, billed to us, so it works for
  * every subscriber regardless of how they open the app.
  */
+// Dedicated column-inventory prompt. Run several times in parallel and
+// voted on in code (see consensusWalls), because column "kinds" are read off
+// the picture and a single read is not repeatable.
+const COLUMNS_PROMPT = `You are transcribing the COLUMN LAYOUT of the front elevations of joinery in this drawing. Do not quote or price anything. Find every distinct FRONT elevation of joinery (never a side/end/detail view or a 3D sketch). For each, go column by column from left to right, using the individual figures printed in the dimension string along the bottom of the elevation (the figures between the tick marks), copied EXACTLY — never estimate or compute a width. Include small spacer/filler figures as their own columns with is_gap true.
+
+For each column answer these questions by LOOKING at what is drawn in that column's strip:
+  - has_base_cabinets: are cabinet doors/drawers drawn on the floor up to benchtop height (about 0-900mm)? (sink, dishwasher/dish drawer, bin and drawer sections all count)
+  - has_wall_cabinets: are cabinet doors, boxes or shelves actually drawn ABOVE the benchtop, hanging, ending below the ceiling? Blank or open wall above the benchtop (splashback, window, rangehood space, sink/mixer notes, a dimension for the splashback) is NO — answer false unless you can point to wall doors there. An elevation bracket or dimension line spanning blank wall does not make it a wall cabinet.
+  - is_full_height: is the column ONE unbroken floor-to-ceiling carcase (a pantry, broom cupboard, or an integrated fridge/freezer housing with its doors above)?
+  - is_fridge_column: does the column contain an integrated fridge or freezer (label like "INTEGRATED FRIDGE")?
+  - is_gap: a spacer, filler, end panel or anything that is not joinery.
+  - label: any text printed in the column (copy it, or empty).
+A column drawn full height with no benchtop break is full height, not base plus wall.
+
+Return ONLY JSON: { "walls": [ { "name": "Front wall", "page": 1, "overall_mm": 0, "columns": [ { "width_mm": 0, "has_base_cabinets": true, "has_wall_cabinets": false, "is_full_height": false, "is_fridge_column": false, "is_gap": false, "label": "" } ] } ] }
+overall_mm is the single overall dimension printed for the whole elevation (0 if none). If a column's width is not printed, set width_mm to 0.`;
+
 export async function POST(request: NextRequest) {
   const supabase = createClient();
   const {
@@ -358,7 +362,107 @@ export async function POST(request: NextRequest) {
     return warnings;
   }
 
-  const [resultA, resultB] = await Promise.all([readOnce(), readOnce()]);
+  // ---- Column inventory: 3 focused reads, majority-voted in code ----------
+  type RawCol = {
+    width_mm: number;
+    has_base_cabinets?: boolean;
+    has_wall_cabinets?: boolean;
+    is_full_height?: boolean;
+    is_fridge_column?: boolean;
+    is_gap?: boolean;
+    label?: string;
+  };
+  type RawWall = { name?: string; page?: number; overall_mm?: number; columns?: RawCol[] };
+
+  async function readColumnsOnce(): Promise<RawWall[] | null> {
+    try {
+      const colContent: unknown[] = [
+        { type: "text", text: "Drawing to read:" },
+        content[content.findIndex((b) => (b as { text?: string }).text === "Drawing to quote from:") + 1],
+        { type: "text", text: COLUMNS_PROMPT },
+      ];
+      const msg = await anthropic.messages.create({
+        model: "claude-sonnet-4-5",
+        max_tokens: 7000,
+        thinking: { type: "enabled", budget_tokens: 3000 },
+        messages: [{ role: "user", content: colContent as never }],
+      } as never);
+      const tb = msg.content.find((b) => b.type === "text");
+      if (!tb || tb.type !== "text") return null;
+      const m = tb.text.match(/\{[\s\S]*\}/);
+      const j = JSON.parse(m ? m[0] : tb.text);
+      return Array.isArray(j.walls) ? (j.walls as RawWall[]) : null;
+    } catch (err) {
+      console.error("Column inventory read failed:", err);
+      return null;
+    }
+  }
+
+  const COL_FIELDS = ["has_base_cabinets", "has_wall_cabinets", "is_full_height", "is_fridge_column", "is_gap"] as const;
+
+  function consensusWalls(reads: RawWall[][]): {
+    walls: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[] }[];
+    warnings: string[];
+  } {
+    const warnings: string[] = [];
+    const out: ReturnType<typeof consensusWalls>["walls"] = [];
+    const base = reads[0];
+    base.forEach((w0, wi) => {
+      const o0 = w0.overall_mm || 0;
+      // Match this wall in every read by overall dimension (fallback: index).
+      const group: RawWall[] = reads.map((r) => {
+        const byOverall = o0 > 0 ? r.find((w) => w.overall_mm && Math.abs((w.overall_mm || 0) - o0) / o0 <= 0.01) : undefined;
+        return (byOverall || r[wi]) as RawWall;
+      }).filter((w) => w && Array.isArray(w.columns) && w.columns.length > 0);
+      if (group.length === 0) return;
+      const overall = o0 || group.map((w) => w.overall_mm || 0).find((n) => n > 0) || 0;
+      // Pick the width sequence most reads agree on (ties: closest to overall).
+      const sigs = new Map<string, { w: RawWall; n: number; sum: number }>();
+      for (const w of group) {
+        const widths = w.columns!.map((c) => Math.round(c.width_mm || 0));
+        const key = widths.join(",");
+        const e = sigs.get(key) || { w, n: 0, sum: widths.reduce((a, b) => a + b, 0) };
+        e.n++;
+        sigs.set(key, e);
+      }
+      const ranked = Array.from(sigs.values()).sort(
+        (a, b) => b.n - a.n || Math.abs(a.sum - overall) - Math.abs(b.sum - overall)
+      );
+      const best = ranked[0];
+      const name = w0.name || `Wall ${wi + 1}`;
+      const same = group.filter((w) => w.columns!.map((c) => Math.round(c.width_mm || 0)).join(",") === best.w.columns!.map((c) => Math.round(c.width_mm || 0)).join(","));
+      if (best.n < group.length) {
+        warnings.push(`${name}: the AI's ${group.length} column reads disagreed on the printed widths — used the version ${best.n} of ${group.length} agreed on; check the Column breakdown.`);
+      }
+      const columns = best.w.columns!.map((c0, ci) => {
+        const vote: Record<string, boolean> = {};
+        for (const f of COL_FIELDS) {
+          const yes = same.filter((w) => w.columns![ci]?.[f] === true).length;
+          vote[f] = yes * 2 > same.length;
+          if (yes > 0 && yes < same.length) {
+            warnings.push(`${name} column ${Math.round(c0.width_mm || 0)}mm: reads split on "${f.replace(/_/g, " ")}" (${yes} of ${same.length} yes) — majority used; check the Column breakdown.`);
+          }
+        }
+        let kind = "gap";
+        if (vote.is_gap) kind = "gap";
+        else if (vote.is_full_height || vote.is_fridge_column) kind = "tall";
+        else if (vote.has_base_cabinets && vote.has_wall_cabinets) kind = "base_wall";
+        else if (vote.has_base_cabinets) kind = "base";
+        else if (vote.has_wall_cabinets) kind = "wall";
+        return { width_mm: Math.round(c0.width_mm || 0), kind, label: c0.label || "" };
+      });
+      out.push({ room: "", name, page: w0.page || 1, overall_mm: overall, columns });
+    });
+    return { walls: out, warnings };
+  }
+
+  const [resultA, resultB, colA, colB, colC] = await Promise.all([
+    readOnce(),
+    readOnce(),
+    readColumnsOnce(),
+    readColumnsOnce(),
+    readColumnsOnce(),
+  ]);
 
   // If both reads failed outright, there's nothing to fall back to.
   if (!resultA.parsed && !resultB.parsed) {
@@ -372,5 +476,25 @@ export async function POST(request: NextRequest) {
   const consistencyWarnings =
     resultA.parsed && resultB.parsed ? compareReads(resultA.parsed.items, resultB.parsed.items) : [];
 
-  return NextResponse.json({ ...primary, consistency_warnings: consistencyWarnings });
+  // Column inventory: vote across the focused reads. Rooms are filled from
+  // the main read's items (single-room jobs get that room; multi-room jobs
+  // fall back to the wall's name appearing in an item's note).
+  const colReads = [colA, colB, colC].filter((r): r is RawWall[] => !!r && r.length > 0);
+  let walls: ParsedPlan["walls"] = undefined;
+  const colWarnings: string[] = [];
+  if (colReads.length > 0) {
+    const cons = consensusWalls(colReads);
+    const rooms = Array.from(new Set(primary.items.map((i) => (i.room || "General").trim())));
+    walls = cons.walls.map((w) => {
+      const hit = primary.items.find((i) => (i.note || "").toLowerCase().includes(w.name.toLowerCase()));
+      return { ...w, room: (hit?.room || rooms[0] || "General").trim() };
+    });
+    colWarnings.push(...cons.warnings);
+  }
+
+  return NextResponse.json({
+    ...primary,
+    walls,
+    consistency_warnings: [...consistencyWarnings, ...colWarnings],
+  });
 }
