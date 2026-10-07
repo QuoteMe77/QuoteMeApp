@@ -166,6 +166,16 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
   const planPath: unknown = body?.planPath;
   const schedulePath: unknown = body?.schedulePath;
+  // Exact column widths read from the PDF's own text layer by the browser
+  // (see lib/dimensionRows.ts). Empty for scans/images.
+  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string }[] };
+  const dimStrings: DimStr[] = Array.isArray(body?.dimensionStrings)
+    ? (body.dimensionStrings as DimStr[]).filter(
+        (d) =>
+          d && typeof d.overall === "number" && Array.isArray(d.columns) && d.columns.length >= 3 && d.columns.length <= 40 &&
+          d.columns.every((c) => typeof c.width === "number" && typeof c.x0 === "number" && typeof c.x1 === "number")
+      ).slice(0, 12)
+    : [];
   if (typeof planPath !== "string" || !planPath) {
     return NextResponse.json({ error: "No file uploaded." }, { status: 400 });
   }
@@ -456,13 +466,111 @@ export async function POST(request: NextRequest) {
     return { walls: out, warnings };
   }
 
-  const [resultA, resultB, colA, colB, colC] = await Promise.all([
+
+  // ---- Fixed-width mode: widths came from the PDF text, the AI only says
+  // what is in each column ------------------------------------------------
+  const FIXED_PROMPT = `You are classifying the COLUMNS of the front elevations of joinery in this drawing. The exact column widths have already been read from the drawing's text and are listed below, left to right, for each elevation, with each column's horizontal position as a percentage of the page width. Do NOT change, add or remove columns and do not report widths. For each listed column, look at that column's vertical strip of the elevation (above its position on the page) and answer:
+  - has_base_cabinets: cabinet doors/drawers drawn on the floor up to benchtop height (about 0-900mm)? (sink, dishwasher/dish drawer, bin and drawer sections all count)
+  - has_wall_cabinets: cabinet doors, boxes or shelves actually DRAWN above the benchtop, hanging, ending below the ceiling? Blank or open wall above the benchtop (splashback, window, rangehood space, sink/mixer notes) is false. An elevation bracket or dimension line over blank wall does not make it a wall cabinet.
+  - is_full_height: ONE unbroken floor-to-ceiling carcase (pantry, broom cupboard, or an integrated fridge/freezer housing with its doors above)?
+  - is_fridge_column: contains an integrated fridge or freezer?
+  - is_gap: a spacer, filler, end panel or anything that is not joinery (very narrow strips are almost always this).
+Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_base_cabinets": true, "has_wall_cabinets": false, "is_full_height": false, "is_fridge_column": false, "is_gap": false } ] } ] } with one entry per listed elevation and one per listed column, in the same order.`;
+
+  function describeDimStrings(): string {
+    return dimStrings
+      .map(
+        (d, i) =>
+          `Elevation ${i} (page ${d.page}, overall ${d.overall}mm): ` +
+          d.columns
+            .map(
+              (c, ci) =>
+                `[${ci}] ${c.width}mm at ${(c.x0 * 100).toFixed(0)}%-${(c.x1 * 100).toFixed(0)}%${c.label ? ` (text in strip: ${c.label.slice(0, 80)})` : ""}`
+            )
+            .join("; ")
+      )
+      .join("\n");
+  }
+
+  type FlagCol = Partial<Record<(typeof COL_FIELDS_FIXED)[number], boolean>>;
+  const COL_FIELDS_FIXED = ["has_base_cabinets", "has_wall_cabinets", "is_full_height", "is_fridge_column", "is_gap"] as const;
+
+  async function readFixedOnce(): Promise<FlagCol[][] | null> {
+    try {
+      const planIdx = content.findIndex((b) => (b as { text?: string }).text === "Drawing to quote from:") + 1;
+      const msg = await anthropic.messages.create({
+        model: "claude-sonnet-4-5",
+        max_tokens: 6000,
+        thinking: { type: "enabled", budget_tokens: 2500 },
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Drawing to read:" },
+              content[planIdx],
+              { type: "text", text: `${FIXED_PROMPT}\n\nColumns:\n${describeDimStrings()}` },
+            ] as never,
+          },
+        ],
+      } as never);
+      const tb = msg.content.find((b: { type: string }) => b.type === "text") as { type: "text"; text: string } | undefined;
+      if (!tb) return null;
+      const m = tb.text.match(/\{[\s\S]*\}/);
+      const j = JSON.parse(m ? m[0] : tb.text);
+      if (!Array.isArray(j.walls)) return null;
+      return dimStrings.map((d, wi) => {
+        const w = j.walls.find((x: { index?: number }) => x.index === wi) || j.walls[wi];
+        return d.columns.map((_, ci) => ((w?.columns || []).find((c: { index?: number }) => c.index === ci) || w?.columns?.[ci] || {}) as FlagCol);
+      });
+    } catch (err) {
+      console.error("Fixed-width column classification failed:", err);
+      return null;
+    }
+  }
+
+  function consensusFixed(reads: FlagCol[][][]): {
+    walls: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[] }[];
+    warnings: string[];
+  } {
+    const warnings: string[] = [];
+    const walls = dimStrings.map((d, wi) => {
+      const name = `Elevation ${wi + 1} (page ${d.page}, ${d.overall}mm)`;
+      const columns = d.columns.map((c, ci) => {
+        const vote: Record<string, boolean> = {};
+        for (const f of COL_FIELDS_FIXED) {
+          const yes = reads.filter((r) => r[wi]?.[ci]?.[f] === true).length;
+          vote[f] = yes * 2 > reads.length;
+          if (yes > 0 && yes < reads.length) {
+            warnings.push(`${name}, ${c.width}mm column: reads split on "${f.replace(/_/g, " ")}" (${yes} of ${reads.length} yes) — majority used.`);
+          }
+        }
+        // Deterministic overrides from the drawing's own text and widths.
+        if (/fridge|freezer/i.test(c.label)) vote.is_fridge_column = true;
+        if (c.width < 60) vote.is_gap = true;
+        let kind = "gap";
+        if (vote.is_gap) kind = "gap";
+        else if (vote.is_full_height || vote.is_fridge_column) kind = "tall";
+        else if (vote.has_base_cabinets && vote.has_wall_cabinets) kind = "base_wall";
+        else if (vote.has_base_cabinets) kind = "base";
+        else if (vote.has_wall_cabinets) kind = "wall";
+        return { width_mm: c.width, kind, label: c.label };
+      });
+      return { room: "", name, page: d.page, overall_mm: d.overall, columns };
+    });
+    return { walls, warnings };
+  }
+
+  const [resultA, resultB, colA, colB, colC, fixA, fixB, fixC] = await Promise.all([
     readOnce(),
     readOnce(),
-    readColumnsOnce(),
-    readColumnsOnce(),
-    readColumnsOnce(),
+    dimStrings.length ? Promise.resolve(null) : readColumnsOnce(),
+    dimStrings.length ? Promise.resolve(null) : readColumnsOnce(),
+    dimStrings.length ? Promise.resolve(null) : readColumnsOnce(),
+    dimStrings.length ? readFixedOnce() : Promise.resolve(null),
+    dimStrings.length ? readFixedOnce() : Promise.resolve(null),
+    dimStrings.length ? readFixedOnce() : Promise.resolve(null),
   ]);
+  const fixedReads = [fixA, fixB, fixC].filter((r): r is FlagCol[][] => !!r);
 
   // If both reads failed outright, there's nothing to fall back to.
   if (!resultA.parsed && !resultB.parsed) {
@@ -482,8 +590,8 @@ export async function POST(request: NextRequest) {
   const colReads = [colA, colB, colC].filter((r): r is RawWall[] => !!r && r.length > 0);
   let walls: ParsedPlan["walls"] = undefined;
   const colWarnings: string[] = [];
-  if (colReads.length > 0) {
-    const cons = consensusWalls(colReads);
+  if (fixedReads.length > 0 || colReads.length > 0) {
+    const cons = fixedReads.length > 0 ? consensusFixed(fixedReads) : consensusWalls(colReads);
     const rooms = Array.from(new Set(primary.items.map((i) => (i.room || "General").trim())));
     walls = cons.walls.map((w) => {
       const hit = primary.items.find((i) => (i.note || "").toLowerCase().includes(w.name.toLowerCase()));
