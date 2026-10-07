@@ -529,6 +529,16 @@ export default function QuoteBuilder({
     if (/hanging\s*rod|hanging\s*rail/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("hanging rail in laundry")) || null;
     }
+    // Integrated appliances are priced as the joinery shop's "Integration
+    // Service" line, never as a bin or a cabinet match.
+    if (/fridge|freezer/.test(name)) {
+      const french = /french/.test(`${name} ${it.material_hint}`.toLowerCase());
+      const want = french ? "integration service - french door fridge" : "integration service - single fridge or freezer";
+      return priceBook.find((p) => p.name.toLowerCase().includes(want)) || null;
+    }
+    if (/dishwasher|dish\s*drawer/.test(name)) {
+      return priceBook.find((p) => p.name.toLowerCase().includes("integration service - dishwasher")) || null;
+    }
     if (it.material_hint.trim()) return null;
     if (/hamper/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("finista edge uni-hamper 450")) || null;
