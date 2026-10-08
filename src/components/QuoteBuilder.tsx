@@ -202,6 +202,8 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
     const data = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data }).promise;
     const out: DimensionString[] = [];
+    let totalItems = 0;
+    const bigNums: number[] = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const viewport = page.getViewport({ scale: 1 });
@@ -229,6 +231,11 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
           words.push({ str, x: e, y, w: raw.width, rotated });
         }
       }
+      totalItems += words.length;
+      for (const w of words) {
+        const n = /^\d+(\.\d+)?$/.test(w.str) ? parseFloat(w.str) : 0;
+        if (n >= 300 && bigNums.length < 8) bigNums.push(n);
+      }
       out.push(...findDimensionStrings(words, i, viewport.width));
     }
     // The same elevation can appear on two sheets (or twice on one) — keep
@@ -243,7 +250,9 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
     });
     return {
       strings: unique,
-      note: unique.length ? `found ${unique.length} dimension string(s) in the PDF text` : "no dimension strings found in the PDF text (scanned or outlined drawing?)",
+      note: unique.length
+        ? `found ${unique.length} dimension string(s) in the PDF text`
+        : `no dimension strings found (PDF has ${pdf.numPages} page(s), ${totalItems} text pieces; large figures seen: ${bigNums.join(", ") || "none"})`,
     };
   } catch (err) {
     console.error("Could not read dimension text from the PDF:", err);
