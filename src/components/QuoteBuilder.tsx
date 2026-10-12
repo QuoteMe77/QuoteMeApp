@@ -238,16 +238,9 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
       }
       out.push(...findDimensionStrings(words, i, viewport.width));
     }
-    // The same elevation can appear on two sheets (or twice on one) — keep
-    // each distinct dimension string once so it is never added up twice.
-    const seen = new Set<string>();
-    const unique = out.filter((d) => {
-      const key = `${d.overall}|${d.columns.map((c) => c.width).join(",")}`;
-      const rev = `${d.overall}|${d.columns.map((c) => c.width).reverse().join(",")}`;
-      if (seen.has(key) || seen.has(rev)) return false;
-      seen.add(key);
-      return true;
-    });
+    // Repeated copies of an elevation (e.g. a mirrored view on another page) are all
+    // kept: the server pools the AI's votes across copies and counts the wall once.
+    const unique = out;
     return {
       strings: unique,
       note: unique.length

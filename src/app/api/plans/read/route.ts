@@ -551,15 +551,36 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
     warnings: string[];
   } {
     const warnings: string[] = [];
-    const walls = dimStrings.map((d, wi) => {
-      const name = `Elevation ${wi + 1} (page ${d.page}, ${d.overall}mm)`;
-      const columns = d.columns.map((c, ci) => {
+    // Copies of the same elevation (same overall and the same set of widths,
+    // possibly mirrored) are pooled into one wall, so every copy's votes count
+    // and the wall's length is only added up once.
+    const keyOf = (d: DimStr) => `${d.overall}|${d.columns.map((c) => c.width).sort((x, y) => x - y).join(",")}`;
+    const groups = new Map<string, number[]>();
+    dimStrings.forEach((d, wi) => {
+      const k = keyOf(d);
+      groups.set(k, [...(groups.get(k) || []), wi]);
+    });
+    const walls = Array.from(groups.values()).map((members, gi) => {
+      const first = dimStrings[members[0]];
+      const n = first.columns.length;
+      const name = `Elevation ${gi + 1} (page ${first.page}, ${first.overall}mm)`;
+      const columns = first.columns.map((c, ci) => {
         const vote: Record<string, boolean> = {};
         for (const f of COL_FIELDS_FIXED) {
-          const yes = reads.filter((r) => r[wi]?.[ci]?.[f] === true).length;
-          vote[f] = yes * 2 > reads.length;
-          if (yes > 0 && yes < reads.length) {
-            warnings.push(`${name}, ${c.width}mm column: reads split on "${f.replace(/_/g, " ")}" (${yes} of ${reads.length} yes) — majority used.`);
+          let yes = 0;
+          let total = 0;
+          for (const wi of members) {
+            const d = dimStrings[wi];
+            const same = d.columns.map((x) => x.width).join(",") === first.columns.map((x) => x.width).join(",");
+            const idx = same ? ci : n - 1 - ci;
+            for (const r of reads) {
+              total++;
+              if (r[wi]?.[idx]?.[f] === true) yes++;
+            }
+          }
+          vote[f] = yes * 2 > total;
+          if (yes > 0 && yes < total) {
+            warnings.push(`${name}, ${c.width}mm column: reads split on "${f.replace(/_/g, " ")}" (${yes} of ${total} yes) — majority used.`);
           }
         }
         // Deterministic overrides from the drawing's own text and widths.
@@ -573,7 +594,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
         else if (vote.has_wall_cabinets) kind = "wall";
         return { width_mm: c.width, kind, label: c.label };
       });
-      return { room: "", name, page: d.page, overall_mm: d.overall, columns };
+      return { room: "", name, page: first.page, overall_mm: first.overall, columns };
     });
     return { walls, warnings };
   }
