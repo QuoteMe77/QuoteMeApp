@@ -2,6 +2,7 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
+  ImageRun,
   Footer,
   Packer,
   PageNumber,
@@ -16,13 +17,20 @@ import {
 } from "docx";
 import { saveAs } from "file-saver";
 import type { ExportQuote } from "./exportPdf";
+import { VICELLO_FOOTER_LINES, VICELLO_LOGO_PNG, VICELLO_LOGO_RATIO, VICELLO_MARK_PNG, isVicello } from "./brandAssets";
 import { APPROVAL_TEXT, STANDARD_INCLUSIONS, TERMS_SECTIONS, parseTermLine, quoteAreaGroups } from "./quoteTerms";
 
 const INK = "241E17";
-const BRASS = "9C6B2E";
+const BRASS = "8B7E6E";
 const SOFT = "6B6053";
-const BAND = "F3EEE4";
+const BAND = "F5F1EB";
 const LINE = "DDD5C6";
+function b64(s: string) {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
 const W = 10200; // content width (A4, 0.75" margins) in DXA
 const FONT = "Arial";
 
@@ -72,7 +80,7 @@ function bandRow(num: string, title: string, price: string, hasPoa: boolean) {
   return new Table({
     columnWidths: [700, W - 700 - 2400, 2400],
     width: { size: W, type: WidthType.DXA },
-    borders: { top: none, bottom: none, left: { style: BorderStyle.SINGLE, size: 24, color: BRASS }, right: none, insideHorizontal: none, insideVertical: none },
+    borders: { top: none, bottom: none, left: { style: BorderStyle.SINGLE, size: 24, color: INK }, right: none, insideHorizontal: none, insideVertical: none },
     rows: [
       new TableRow({
         cantSplit: true,
@@ -111,20 +119,24 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
     new Table({
       columnWidths: [W / 2, W / 2],
       width: { size: W, type: WidthType.DXA },
-      borders: { top: none, left: none, right: none, insideHorizontal: none, insideVertical: none, bottom: { style: BorderStyle.SINGLE, size: 12, color: INK } },
+      borders: { top: none, left: none, right: none, insideHorizontal: none, insideVertical: none, bottom: none },
       rows: [
         new TableRow({
           children: [
             cell(
               [
-                new Paragraph({ children: [run((quote.businessName || "Business Name").toUpperCase(), { bold: true, size: 32, font: "Times New Roman", spacing: 60 })] }),
-                new Paragraph({ children: [run(quote.businessContact || "", { size: 16, color: SOFT })] }),
+                ...(isVicello(quote.businessName)
+                  ? [new Paragraph({ children: [new ImageRun({ type: "png", data: b64(VICELLO_LOGO_PNG), transformation: { width: Math.round(46 * VICELLO_LOGO_RATIO), height: 46 } })] })]
+                  : [
+                      new Paragraph({ children: [run((quote.businessName || "Business Name").toUpperCase(), { bold: true, size: 32, font: "Times New Roman", spacing: 60 })] }),
+                      new Paragraph({ children: [run(quote.businessContact || "", { size: 16, color: SOFT })] }),
+                    ]),
               ],
               W / 2
             ),
             cell(
               [
-                new Paragraph({ alignment: AlignmentType.RIGHT, children: [run("QUOTATION", { size: 44, color: BRASS, font: "Times New Roman" })] }),
+                new Paragraph({ alignment: AlignmentType.RIGHT, children: [run("QUOTATION", { size: 38, color: INK, font: "Times New Roman", spacing: 90 })] }),
                 new Paragraph({ alignment: AlignmentType.RIGHT, children: [run([quote.clientName, quote.quoteRef ? `Ref ${quote.quoteRef}` : ""].filter(Boolean).join(" · "), { size: 16, color: SOFT })] }),
               ],
               W / 2
@@ -139,8 +151,8 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
   // Details grid
   const det: [string, string, string, string][] = [
     ["Client name", quote.clientName || "—", "Date", quote.quoteDate || "—"],
-    ["Site address", quote.jobAddress || "—", "Quote ref", quote.quoteRef || "—"],
-    ["Builder", quote.builderName || "—", "Valid for", `${quote.validDays} days`],
+    ["Site address", quote.jobAddress || "—", "Job #", quote.quoteRef || "—"],
+    ["Consultant", quote.builderName || "—", "Valid for", `${quote.validDays} days`],
   ];
   const dw = [1700, 3400, 1500, 3600];
   const hair = { style: BorderStyle.SINGLE, size: 4, color: LINE };
@@ -148,7 +160,7 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
     new Table({
       columnWidths: dw,
       width: { size: W, type: WidthType.DXA },
-      borders: { top: hair, bottom: hair, left: none, right: none, insideHorizontal: hair, insideVertical: none },
+      borders: { top: none, bottom: none, left: none, right: none, insideHorizontal: none, insideVertical: none },
       rows: det.map(
         (r) =>
           new TableRow({
@@ -209,7 +221,6 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
       rows: sumRows,
     }),
     new Paragraph({
-      alignment: AlignmentType.RIGHT,
       spacing: { before: 200, after: 40 },
       tabStops: [{ type: TabStopType.RIGHT, position: W }],
       children: [run("Subtotal (ex GST)", { color: SOFT, size: 20 }), run(`\t$${money(subtotal)}`, { bold: true, size: 20 })],
@@ -301,14 +312,21 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
           default: new Footer({
             children: [
               new Paragraph({
-                tabStops: [{ type: TabStopType.RIGHT, position: W }],
+                alignment: AlignmentType.CENTER,
                 border: { top: { style: BorderStyle.SINGLE, size: 4, color: LINE, space: 6 } },
+                children: isVicello(quote.businessName)
+                  ? [new ImageRun({ type: "png", data: b64(VICELLO_MARK_PNG), transformation: { width: 16, height: 16 } })]
+                  : [],
+              }),
+              ...(isVicello(quote.businessName) ? VICELLO_FOOTER_LINES : [[quote.businessName, quote.businessContact].filter(Boolean).join("  ·  ")]).map(
+                (t) => new Paragraph({ alignment: AlignmentType.CENTER, children: [run(t, { size: 14, color: SOFT })] })
+              ),
+              new Paragraph({
+                alignment: AlignmentType.RIGHT,
                 children: [
-                  run([quote.businessName, "Quotation", quote.jobAddress].filter(Boolean).join("  ·  "), { size: 15, color: SOFT }),
-                  new TextRun({ text: "\tPage ", size: 15, color: SOFT, font: FONT }),
-                  new TextRun({ children: [PageNumber.CURRENT], size: 15, color: SOFT, font: FONT }),
-                  new TextRun({ text: " of ", size: 15, color: SOFT, font: FONT }),
-                  new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 15, color: SOFT, font: FONT }),
+                  new TextRun({ children: [PageNumber.CURRENT], size: 16, color: SOFT, font: FONT }),
+                  new TextRun({ text: " / ", size: 16, color: SOFT, font: FONT }),
+                  new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 16, color: SOFT, font: FONT }),
                 ],
               }),
             ],

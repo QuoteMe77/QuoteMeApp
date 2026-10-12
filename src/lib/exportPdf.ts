@@ -1,4 +1,5 @@
 import jsPDF from "jspdf";
+import { VICELLO_FOOTER_LINES, VICELLO_LOGO_PNG, VICELLO_LOGO_RATIO, VICELLO_MARK_PNG, isVicello } from "./brandAssets";
 import { APPROVAL_TEXT, STANDARD_INCLUSIONS, TERMS_SECTIONS, parseTermLine, quoteAreaGroups } from "./quoteTerms";
 
 export type ExportLineItem = {
@@ -31,9 +32,9 @@ export type ExportQuote = {
 
 type RGB = [number, number, number];
 const ink: RGB = [36, 30, 23];
-const brass: RGB = [156, 107, 46];
+const brass: RGB = [139, 126, 110]; // warm grey accent
 const soft: RGB = [107, 96, 83];
-const band: RGB = [243, 238, 228];
+const band: RGB = [245, 241, 235];
 const line: RGB = [221, 213, 198];
 
 function money(n: number) {
@@ -46,7 +47,7 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   const H = doc.internal.pageSize.getHeight();
   const mx = 56;
   const cw = W - mx * 2;
-  const bottom = H - 60;
+  const bottom = H - 84;
   let y = 56;
 
   const setFont = (f: "helvetica" | "times", st: "normal" | "bold" | "italic", size: number, color: RGB) => {
@@ -60,17 +61,20 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
       y = 56;
     }
   };
-  const spaced = (t: string) => t.toUpperCase().split("").join(" ");
+  const spacedText = (t: string, x: number, yy: number, cs: number, align: "left" | "right" = "left") => {
+    doc.setCharSpace(cs);
+    const w = doc.getTextWidth(t) + t.length * cs;
+    doc.text(t, align === "right" ? x - w + cs : x, yy);
+    doc.setCharSpace(0);
+  };
   const sectionHeading = (title: string) => {
     need(50);
     y += 10;
     setFont("helvetica", "bold", 8.5, brass);
-    doc.setCharSpace(2);
-    doc.text(title.toUpperCase(), mx, y);
-    doc.setCharSpace(0);
+    spacedText(title.toUpperCase(), mx, y, 2);
     y += 7;
     doc.setDrawColor(...brass);
-    doc.setLineWidth(0.8);
+    doc.setLineWidth(0.6);
     doc.line(mx, y, W - mx, y);
     y += 16;
   };
@@ -108,55 +112,53 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   };
 
   // ---- Header ----
-  setFont("times", "bold", 17, ink);
-  doc.setCharSpace(3);
-  const name = (quote.businessName || "Business Name").toUpperCase();
-  let fs = 17;
-  while (fs > 10 && doc.getTextWidth(name) > cw * 0.62) {
-    fs -= 1;
-    doc.setFontSize(fs);
+  const vic = isVicello(quote.businessName);
+  if (vic) {
+    const lh = 38;
+    doc.addImage("data:image/png;base64," + VICELLO_LOGO_PNG, "PNG", mx, y - 22, lh * VICELLO_LOGO_RATIO, lh);
+  } else {
+    setFont("times", "bold", 17, ink);
+    const name = (quote.businessName || "Business Name").toUpperCase();
+    doc.setCharSpace(3);
+    let fs = 17;
+    while (fs > 10 && doc.getTextWidth(name) + name.length * 3 > cw * 0.6) {
+      fs -= 1;
+      doc.setFontSize(fs);
+    }
+    doc.text(name, mx, y);
+    doc.setCharSpace(0);
   }
-  doc.text(name, mx, y);
-  doc.setCharSpace(0);
-  setFont("times", "normal", 22, brass);
-  doc.text("QUOTATION", W - mx, y, { align: "right" });
-  y += 16;
+  setFont("times", "normal", 19, ink);
+  spacedText("QUOTATION", W - mx, y + 2, 4.5, "right");
   setFont("helvetica", "normal", 8.5, soft);
-  if (quote.businessContact) doc.text(quote.businessContact, mx, y, { maxWidth: cw * 0.6 });
-  doc.text([quote.clientName, quote.quoteRef ? `Ref ${quote.quoteRef}` : ""].filter(Boolean).join(" · "), W - mx, y, { align: "right" });
-  y += 12;
-  doc.setDrawColor(...ink);
-  doc.setLineWidth(1.2);
-  doc.line(mx, y, W - mx, y);
-  y += 26;
+  doc.text([quote.clientName, quote.quoteRef ? `Ref ${quote.quoteRef}` : ""].filter(Boolean).join(" · "), W - mx, y + 17, { align: "right" });
+  if (!vic && quote.businessContact) doc.text(quote.businessContact, mx, y + 17, { maxWidth: cw * 0.6 });
+  y += 62;
 
   // ---- Details grid ----
   const rows: [string, string, string, string][] = [
     ["Client name", quote.clientName || "—", "Date", quote.quoteDate || "—"],
-    ["Site address", quote.jobAddress || "—", "Quote ref", quote.quoteRef || "—"],
-    ["Builder", quote.builderName || "—", "Valid for", `${quote.validDays} days`],
+    ["Site address", quote.jobAddress || "—", "Job #", quote.quoteRef || "—"],
+    ["Consultant", quote.builderName || "—", "Valid for", `${quote.validDays} days`],
   ];
-  const lw = 88, rw = 74, half = cw / 2;
-  rows.forEach((r, i) => {
-    const rh = 26;
+  const lw = 88, rw = 74, half = cw / 2 + 10;
+  rows.forEach((r) => {
+    setFont("helvetica", "normal", 9.5, ink);
+    const l1 = doc.splitTextToSize(r[1], half - lw - 16) as string[];
+    const l3 = doc.splitTextToSize(r[3], cw - half - rw - 16) as string[];
+    const rh = Math.max(26, Math.max(l1.length, l3.length) * 12 + 14);
     doc.setFillColor(...band);
     doc.rect(mx, y, lw, rh, "F");
     doc.rect(mx + half, y, rw, rh, "F");
-    doc.setDrawColor(...line);
-    doc.setLineWidth(0.5);
-    doc.line(mx, y, W - mx, y);
-    if (i === rows.length - 1) doc.line(mx, y + rh, W - mx, y + rh);
     setFont("helvetica", "bold", 7, soft);
-    doc.setCharSpace(1);
-    doc.text(r[0].toUpperCase(), mx + 8, y + 16);
-    doc.text(r[2].toUpperCase(), mx + half + 8, y + 16);
-    doc.setCharSpace(0);
+    spacedText(r[0].toUpperCase(), mx + 8, y + 16, 1);
+    spacedText(r[2].toUpperCase(), mx + half + 8, y + 16, 1);
     setFont("helvetica", "normal", 9.5, ink);
-    doc.text(r[1], mx + lw + 8, y + 16, { maxWidth: half - lw - 14 });
-    doc.text(r[3], mx + half + rw + 8, y + 16, { maxWidth: half - rw - 14 });
-    y += rh;
+    doc.text(l1, mx + lw + 8, y + 16);
+    doc.text(l3, mx + half + rw + 8, y + 16);
+    y += rh + 2;
   });
-  y += 12;
+  y += 8;
 
   const groups = quoteAreaGroups(quote.items);
   const areaPrice = (g: { included: ExportLineItem[] }) =>
@@ -166,11 +168,9 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   sectionHeading("Quote Summary");
   y -= 8;
   setFont("helvetica", "bold", 7.5, soft);
-  doc.setCharSpace(1);
-  doc.text("#", mx + 4, y);
-  doc.text("AREA", mx + 40, y);
-  doc.text("PRICE EX GST", W - mx - 4, y, { align: "right" });
-  doc.setCharSpace(0);
+  spacedText("#", mx + 4, y, 1);
+  spacedText("AREA", mx + 40, y, 1);
+  spacedText("PRICE EX GST", W - mx - 4, y, 1, "right");
   y += 6;
   doc.setDrawColor(...ink);
   doc.setLineWidth(0.8);
@@ -232,7 +232,7 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     need(60);
     doc.setFillColor(...band);
     doc.rect(mx, y, cw, 24, "F");
-    doc.setFillColor(...brass);
+    doc.setFillColor(...ink);
     doc.rect(mx, y, 3, 24, "F");
     setFont("helvetica", "normal", 8.5, soft);
     doc.text(num, mx + 14, y + 16);
@@ -332,12 +332,18 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     doc.setPage(p);
     doc.setDrawColor(...line);
     doc.setLineWidth(0.5);
-    doc.line(mx, H - 42, W - mx, H - 42);
-    setFont("helvetica", "normal", 7.5, soft);
-    doc.text([quote.businessName, "Quotation", quote.jobAddress].filter(Boolean).join("  ·  "), mx, H - 28);
-    doc.text(`Page ${p} of ${pages}`, W - mx, H - 28, { align: "right" });
+    doc.line(mx, H - 66, W - mx, H - 66);
+    if (vic) {
+      doc.addImage("data:image/png;base64," + VICELLO_MARK_PNG, "PNG", W / 2 - 8, H - 62, 16, 16);
+      setFont("helvetica", "normal", 7, soft);
+      VICELLO_FOOTER_LINES.forEach((t, i) => doc.text(t, W / 2, H - 38 + i * 9, { align: "center" }));
+    } else {
+      setFont("helvetica", "normal", 7.5, soft);
+      doc.text([quote.businessName, quote.businessContact].filter(Boolean).join("  ·  "), W / 2, H - 44, { align: "center" });
+    }
+    setFont("helvetica", "normal", 8, soft);
+    doc.text(`${p} / ${pages}`, W - mx, H - 18, { align: "right" });
   }
-  void spaced;
   return doc;
 }
 
