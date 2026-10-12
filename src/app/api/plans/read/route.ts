@@ -315,6 +315,13 @@ export async function POST(request: NextRequest) {
       return { parsed: null, error: "No response from the model." };
     }
 
+    if ((message as { stop_reason?: string }).stop_reason === "max_tokens") {
+      return {
+        parsed: null,
+        error: "This plan has too much on it to read in one go (the answer ran out of room). Re-upload and select just the pages for one room or area (up to about 8 pages), then repeat for the next room.",
+      };
+    }
+
     try {
       const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/);
       return { parsed: JSON.parse(jsonMatch ? jsonMatch[0] : textBlock.text), error: null };

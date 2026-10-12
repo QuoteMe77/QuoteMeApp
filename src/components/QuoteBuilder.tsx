@@ -1652,7 +1652,8 @@ export default function QuoteBuilder({
       target,
       file,
       pageCount,
-      selectedPages: allPageIndices(pageCount),
+      // Big drawing sets: start with nothing selected so the whole house isn't read at once.
+      selectedPages: target === "plan" && pageCount > 8 ? new Set<number>() : allPageIndices(pageCount),
       pagesInput: "",
       thumbnails: new Array(pageCount).fill(""),
       busy: false,
@@ -1737,6 +1738,14 @@ export default function QuoteBuilder({
     if (!pdfPicker) return;
     if (pdfPicker.selectedPages.size === 0) {
       setPdfPicker((prev) => (prev ? { ...prev, error: "Select at least one page." } : prev));
+      return;
+    }
+    if (pdfPicker.target === "plan" && pdfPicker.selectedPages.size > 8) {
+      setPdfPicker((prev) =>
+        prev
+          ? { ...prev, error: `${prev.selectedPages.size} pages is too many to read accurately in one go. Select just the pages for one room or area (up to 8), read it, then repeat for the next room.` }
+          : prev
+      );
       return;
     }
     setPdfPicker((prev) => (prev ? { ...prev, busy: true, error: null } : prev));
