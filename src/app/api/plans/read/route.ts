@@ -131,7 +131,9 @@ For each column answer these questions by LOOKING at what is drawn in that colum
   - is_fridge_column: does the column contain an integrated fridge or freezer (label like "INTEGRATED FRIDGE")?
   - is_gap: a spacer, filler, end panel or anything that is not joinery.
   - label: any text printed in the column (copy it, or empty).
-A column drawn full height with no benchtop break is full height, not base plus wall.
+A column drawn full height with no benchtop break is full height, not base plus wall. The benchtop is normally drawn as a horizontal line (often red or orange) at bench height (about 900mm): a column that line crosses has base and/or wall cabinets, never "full height"; a column it does NOT cross, whose doors/shelves run unbroken from the floor up to the ceiling shadowline, is full height (including a fridge column and its doors above).
+
+CHECK YOUR WORK BEFORE ANSWERING: the widths of ALL columns of an elevation, including every small gap (e.g. 19, 22, 30), must add up EXACTLY to that elevation's printed overall dimension. Add them up. If the total is off, you have misread or skipped a figure: look at the dimension string again, find the missing or wrong figure, and fix it. Never output a list that does not sum to the overall. List each elevation once only, even if it is drawn on more than one page.
 
 Return ONLY JSON: { "walls": [ { "name": "Front wall", "page": 1, "overall_mm": 0, "columns": [ { "width_mm": 0, "has_base_cabinets": true, "has_wall_cabinets": false, "is_full_height": false, "is_fridge_column": false, "is_gap": false, "label": "" } ] } ] }
 overall_mm is the single overall dimension printed for the whole elevation (0 if none). If a column's width is not printed, set width_mm to 0.`;
@@ -416,7 +418,14 @@ export async function POST(request: NextRequest) {
   } {
     const warnings: string[] = [];
     const out: ReturnType<typeof consensusWalls>["walls"] = [];
-    const base = reads[0];
+    // Only trust a read of a wall whose widths add up exactly to its printed
+    // overall (±1mm). Drop failing reads when at least one read passes.
+    const sumOf = (w: RawWall) => (w.columns || []).reduce((a, c) => a + (c.width_mm || 0), 0);
+    const passes = (w: RawWall) => !!w.overall_mm && Math.abs(sumOf(w) - (w.overall_mm || 0)) <= 1;
+    const anyPass = reads.some((r) => r.some(passes));
+    if (anyPass) reads = reads.map((r) => r.filter(passes)).filter((r) => r.length > 0);
+    else warnings.push("None of the AI's column reads added up exactly to the printed overall dimension — widths below are unverified; check them against the drawing.");
+    const base = reads.reduce((best, r) => (r.length > best.length ? r : best), reads[0]);
     base.forEach((w0, wi) => {
       const o0 = w0.overall_mm || 0;
       // Match this wall in every read by overall dimension (fallback: index).
@@ -463,7 +472,15 @@ export async function POST(request: NextRequest) {
       });
       out.push({ room: "", name, page: w0.page || 1, overall_mm: overall, columns });
     });
-    return { walls: out, warnings };
+    // The same elevation drawn on two pages must only be counted once.
+    const seen = new Set<string>();
+    const unique = out.filter((w) => {
+      const key = `${w.overall_mm}|${w.columns.map((c) => c.width_mm).join(",")}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return { walls: unique, warnings };
   }
 
 

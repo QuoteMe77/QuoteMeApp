@@ -1109,7 +1109,7 @@ export default function QuoteBuilder({
       const sum = cols.reduce((a, c) => a + c.width_mm, 0);
       const overall = Number(w.overall_mm) || 0;
       const hasZero = cols.some((c) => c.width_mm <= 0 && c.kind !== "gap");
-      const ok = !hasZero && (overall > 0 ? Math.abs(sum - overall) / overall <= 0.02 : false);
+      const ok = !hasZero && (overall > 0 ? Math.abs(sum - overall) <= 2 : false);
       const sumOf = (kinds: string[]) => cols.filter((c) => kinds.includes(c.kind)).reduce((a, c) => a + c.width_mm, 0);
       const rep: ColumnReport = {
         name: w.name || "Wall",
