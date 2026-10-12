@@ -606,6 +606,9 @@ export default function QuoteBuilder({
     if (/dishwasher|dish\s*drawer/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("integration service - dishwasher")) || null;
     }
+    if (/^drawers\b/.test(name)) {
+      return findDrawerHardware(it.drawer_brand || "", /push.to.open|\bpto\b/.test(name));
+    }
     if (/\bpto\b|push.to.open/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().startsWith("touch catch (handle less)")) || null;
     }
@@ -1250,6 +1253,44 @@ export default function QuoteBuilder({
   };
   const [pdfPicker, setPdfPicker] = useState<PdfPicker | null>(null);
 
+  // Drawers get their own line in the list (so they can't be missed), priced
+  // from the drawer hardware rows, instead of being a hidden count on the
+  // cabinet run. The run's own drawer count is cleared so nothing is priced twice.
+  function splitDrawersOut(items: PlanItemResult[]): PlanItemResult[] {
+    const out: PlanItemResult[] = [];
+    for (const it of items) {
+      if (it.calc !== "LM" || !(it.drawer_count > 0)) {
+        out.push(it);
+        continue;
+      }
+      const pto = Math.min(it.pto_drawer_count || 0, it.drawer_count);
+      const standard = it.drawer_count - pto;
+      const brand = (it.drawer_brand || "").trim() || "Merivo";
+      out.push({ ...it, drawer_count: 0, pto_drawer_count: 0 });
+      const base = {
+        ...it,
+        cabinet_type: "other" as const,
+        calc: "QTY" as const,
+        unit: "ea",
+        material_hint: "",
+        drawer_count: 0,
+        pto_drawer_count: 0,
+        open: false,
+        duplicate_wall_warning: undefined,
+        confidence: "high" as const,
+        regions: it.regions,
+      };
+      const where = `${it.name.toLowerCase()} run${it.cabinet_type === "tall" ? " (TALL)" : ""}`;
+      if (standard > 0) {
+        out.push({ ...base, name: `Drawers — ${brand}`, qty: standard, note: `${standard} drawers on the ${where}`, drawer_brand: it.drawer_brand });
+      }
+      if (pto > 0) {
+        out.push({ ...base, name: `Drawers — ${brand} push-to-open`, qty: pto, note: `${pto} push-to-open drawers on the ${where}`, drawer_brand: it.drawer_brand });
+      }
+    }
+    return out;
+  }
+
   // Counts read straight from the PDF's printed text (drawer-depth tags such as
   // 'B' 350 DEEP, and PTO notes) — these override the AI's estimates and are
   // noted on the items so they can be checked.
@@ -1447,7 +1488,7 @@ export default function QuoteBuilder({
       if (Array.isArray(data.items)) {
         const reconciled = reconcileRoomLabels(data.items as PlanItemResult[]);
         roomLabels = reconciled.roomLabels;
-        const merged = applyTextCounts(mergePlanBands(reconciled.items), data.walls);
+        const merged = splitDrawersOut(applyTextCounts(mergePlanBands(reconciled.items), data.walls));
         const inv = applyColumnInventory(merged, data.walls);
         data.items = flagMatchingBandLengths(inv.items);
         data.column_report = inv.report;
