@@ -619,7 +619,10 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
         if (c.width < 60) vote.is_gap = true;
         let kind = "gap";
         if (vote.is_gap) kind = "gap";
-        else if (vote.is_full_height || vote.is_fridge_column) kind = "tall";
+        // A fridge column counts as tall at its full width, and the doors above the
+        // fridge also count as wall cabinets (Vicello's convention).
+        else if (vote.is_fridge_column) kind = "tall_wall";
+        else if (vote.is_full_height) kind = "tall";
         else if (vote.has_base_cabinets && vote.has_wall_cabinets) kind = "base_wall";
         else if (vote.has_base_cabinets) kind = "base";
         else if (vote.has_wall_cabinets) kind = "wall";

@@ -606,6 +606,9 @@ export default function QuoteBuilder({
     if (/dishwasher|dish\s*drawer/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("integration service - dishwasher")) || null;
     }
+    if (/\bpto\b|push.to.open/.test(name)) {
+      return priceBook.find((p) => p.name.toLowerCase().startsWith("touch catch (handle less)")) || null;
+    }
     if (it.material_hint.trim()) return null;
     if (/hamper/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("finista edge uni-hamper 450")) || null;
@@ -1114,8 +1117,8 @@ export default function QuoteBuilder({
         ok,
         columns: cols,
         base: sumOf(["base", "base_wall"]),
-        wall: sumOf(["base_wall", "wall"]),
-        tall: sumOf(["tall"]),
+        wall: sumOf(["base_wall", "wall", "tall_wall"]),
+        tall: sumOf(["tall", "tall_wall"]),
       };
       report.push(rep);
       if (!ok) {
@@ -1137,8 +1140,8 @@ export default function QuoteBuilder({
       t.tall += rep.tall;
       const widths = (kinds: string[]) => cols.filter((c) => kinds.includes(c.kind)).map((c) => c.width_mm).join(" + ");
       if (rep.base > 0) t.parts.base.push(`${rep.name}: ${widths(["base", "base_wall"])}`);
-      if (rep.wall > 0) t.parts.wall.push(`${rep.name}: ${widths(["base_wall", "wall"])}`);
-      if (rep.tall > 0) t.parts.tall.push(`${rep.name}: ${widths(["tall"])}`);
+      if (rep.wall > 0) t.parts.wall.push(`${rep.name}: ${widths(["base_wall", "wall", "tall_wall"])}`);
+      if (rep.tall > 0) t.parts.tall.push(`${rep.name}: ${widths(["tall", "tall_wall"])}`);
       totals.set(roomKey, t);
     }
 
@@ -1265,6 +1268,7 @@ export default function QuoteBuilder({
     const find = (room: string, type: string) =>
       out.findIndex((it) => it.calc === "LM" && it.cabinet_type === type && it.room.trim().toLowerCase() === room);
     const drawers = new Map<string, { n: number; detail: string[] }>();
+    const ptoTotals = new Map<string, number>();
     for (const w of walls) {
       const room = roomOf(w);
       if ((w.drawer_tags || 0) > 0) {
@@ -1275,12 +1279,43 @@ export default function QuoteBuilder({
       }
       for (const [kind, n] of Object.entries(w.pto || {})) {
         if (!n) continue;
-        const type = kind === "base_wall" ? "wall" : kind;
+        const type = kind === "base_wall" ? "wall" : kind === "tall_wall" ? "tall" : kind;
+        ptoTotals.set(room, (ptoTotals.get(room) || 0) + n);
         let idx = find(room, type);
         if (idx < 0) idx = out.findIndex((it) => it.calc === "LM" && it.room.trim().toLowerCase() === room);
         if (idx >= 0) {
           out[idx] = { ...out[idx], note: [out[idx].note, `${n}x PTO (push to open) — counted from the drawing text`].filter(Boolean).join("; ") };
         }
+      }
+    }
+    // PTO gets its own line (like the bin or fridge) so it is priced.
+    for (const [room, n] of ptoTotals) {
+      const existing = out.findIndex((it) => /\bpto\b|push.to.open/i.test(it.name) && it.room.trim().toLowerCase() === room);
+      if (existing >= 0) {
+        out[existing] = { ...out[existing], qty: n, calc: "QTY", unit: "ea" };
+        continue;
+      }
+      const template =
+        out.find((it) => it.calc === "QTY" && it.room.trim().toLowerCase() === room) ||
+        out.find((it) => it.calc === "LM" && it.room.trim().toLowerCase() === room);
+      if (template) {
+        out.push({
+          ...template,
+          name: "Push-to-open (PTO) doors",
+          cabinet_type: "other",
+          calc: "QTY",
+          qty: n,
+          unit: "ea",
+          material_hint: "",
+          drawer_count: 0,
+          pto_drawer_count: 0,
+          drawer_brand: "",
+          open: false,
+          note: `${n}x PTO (push to open) — counted from the drawing text`,
+          confidence: "high",
+          duplicate_wall_warning: undefined,
+          regions: [],
+        });
       }
     }
     for (const [room, d] of drawers) {
@@ -2250,9 +2285,9 @@ export default function QuoteBuilder({
                                   onChange={(e) => setColumnKind(wi, ci, e.target.value)}
                                   className="border border-line rounded px-1 py-0.5 bg-transparent"
                                 >
-                                  {["base", "base_wall", "wall", "tall", "gap"].map((k) => (
+                                  {["base", "base_wall", "wall", "tall", "tall_wall", "gap"].map((k) => (
                                     <option key={k} value={k}>
-                                      {k === "base_wall" ? "base + wall" : k}
+                                      {k === "base_wall" ? "base + wall" : k === "tall_wall" ? "tall + wall (fridge column)" : k}
                                     </option>
                                   ))}
                                 </select>
