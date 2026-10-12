@@ -19,6 +19,7 @@ export type DimColumn = {
   width: number;
   x0: number; // fraction of page width (0-1)
   x1: number;
+  upper?: number; // ADJ/FXD notes printed high up (wall-cabinet zone)
   label: string; // any non-numeric text printed in this column's strip
 };
 
@@ -119,6 +120,16 @@ export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: n
             const half = (mm * s) / 2;
             frame = { top: (best.y - half) / pageH, bottom: (best.y + half) / pageH, mm };
           }
+        }
+        if (frame && s > 0) {
+          const limitY = frame.bottom * pageH - 1500 * s;
+          hit.forEach((n, i) => {
+            const half = (n.v * s) / 2;
+            const x0 = n.xc - half, x1 = n.xc + half;
+            columns[i].upper = textWords.filter(
+              (t) => /^(ADJ|FXD)$/.test(t.str.trim().toUpperCase()) && t.x + t.w / 2 >= x0 && t.x + t.w / 2 <= x1 && t.y < limitY
+            ).length;
+          });
         }
         out.push({ page: pageNo, overall: o.v, columns, frame });
         break;

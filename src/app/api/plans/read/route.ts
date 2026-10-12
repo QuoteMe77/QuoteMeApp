@@ -170,7 +170,7 @@ export async function POST(request: NextRequest) {
   const schedulePath: unknown = body?.schedulePath;
   // Exact column widths read from the PDF's own text layer by the browser
   // (see lib/dimensionRows.ts). Empty for scans/images.
-  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string }[]; frame?: { top: number; bottom: number; mm: number } };
+  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string; upper?: number }[]; frame?: { top: number; bottom: number; mm: number } };
   const dimStrings: DimStr[] = Array.isArray(body?.dimensionStrings)
     ? (body.dimensionStrings as DimStr[]).filter(
         (d) =>
@@ -601,6 +601,11 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
           })
           .join(" ")
           .toUpperCase();
+        const upperAdj = members.reduce((a, wi) => {
+          const d = dimStrings[wi];
+          const same = d.columns.map((x) => x.width).join(",") === first.columns.map((x) => x.width).join(",");
+          return a + (d.columns[same ? ci : n - 1 - ci]?.upper || 0);
+        }, 0);
         const tokens = text.split(/[^A-Z0-9']+/).filter(Boolean);
         // Only shelf notes (ADJ / FXD) in the strip = a full-height shelving unit.
         const shelfOnly = tokens.length > 0 && tokens.every((w) => /^(ADJ|FXD|PTO|SHADOWLINE|TO|CEILING)$/.test(w));
@@ -613,7 +618,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
         } else if (hasDeep) {
           vote.is_full_height = false;
           vote.has_base_cabinets = true;
-          if (hasDoors) vote.has_wall_cabinets = true;
+          if (hasDoors || upperAdj > 0) vote.has_wall_cabinets = true;
         }
         if (/fridge|freezer/i.test(c.label)) vote.is_fridge_column = true;
         if (c.width < 60) vote.is_gap = true;
