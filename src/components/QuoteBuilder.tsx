@@ -2064,11 +2064,24 @@ export default function QuoteBuilder({
     };
   }
 
+  // Plan items that were read but not yet added to the quote would be
+  // missing from the export, so check before exporting.
+  function confirmExport() {
+    if (planResult && selectedPlanItems.size > 0) {
+      return window.confirm(
+        `${selectedPlanItems.size} item(s) read from the plan haven't been added to the quote yet, so they won't be in this export.\n\nPress Cancel, click "Add selected to quote", then export again.\n\nPress OK to export without them.`
+      );
+    }
+    return true;
+  }
+
   function handleExportPdf() {
+    if (!confirmExport()) return;
     downloadQuotePdf(buildExportData(), `${quoteRef || "quote"}.pdf`);
   }
 
   function handleExportDocx() {
+    if (!confirmExport()) return;
     downloadQuoteDocx(buildExportData(), `${quoteRef || "quote"}.docx`);
   }
 
