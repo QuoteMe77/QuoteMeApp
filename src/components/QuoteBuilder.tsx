@@ -2849,6 +2849,7 @@ function LineItemRow({
   onChange: (patch: Partial<LineItem>) => void;
   onRemove: () => void;
 }) {
+  const [sellDraft, setSellDraft] = useState<string | null>(null);
   const sellRate = item.rate * (1 + markupPct / 100);
   const lineTotal = item.poa ? null : item.qty * sellRate;
   const showCategory = item.category && item.category !== "Custom" && item.category !== "From plan";
@@ -2928,9 +2929,20 @@ function LineItemRow({
 
       <div>
         <span className="sm:hidden block text-[10px] uppercase tracking-wide text-ink-soft">Sell/unit</span>
-        <div className="input text-right bg-paper text-ink-soft" title="Cost/unit plus the quote's markup %">
-          ${money(sellRate)}
-        </div>
+        <input
+          type="number"
+          step="0.01"
+          className="input text-right"
+          value={sellDraft ?? (Math.round(sellRate * 100) / 100)}
+          onFocus={() => setSellDraft(String(Math.round(sellRate * 100) / 100))}
+          onChange={(e) => {
+            setSellDraft(e.target.value);
+            const v = parseFloat(e.target.value);
+            onChange({ rate: Number.isFinite(v) ? v / (1 + markupPct / 100) : 0 });
+          }}
+          onBlur={() => setSellDraft(null)}
+          title="Type a sell price here and it adds to the total (cost is back-calculated from the quote's markup %)"
+        />
       </div>
 
       <div className="text-right">
