@@ -583,7 +583,29 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
             warnings.push(`${name}, ${c.width}mm column: reads split on "${f.replace(/_/g, " ")}" (${yes} of ${total} yes) — majority used.`);
           }
         }
-        // Deterministic overrides from the drawing's own text and widths.
+        // Deterministic overrides from the drawing's own printed notes and widths.
+        const text = members
+          .map((wi) => {
+            const d = dimStrings[wi];
+            const same = d.columns.map((x) => x.width).join(",") === first.columns.map((x) => x.width).join(",");
+            return d.columns[same ? ci : n - 1 - ci]?.label || "";
+          })
+          .join(" ")
+          .toUpperCase();
+        const tokens = text.split(/[^A-Z0-9']+/).filter(Boolean);
+        // Only shelf notes (ADJ / FXD) in the strip = a full-height shelving unit.
+        const shelfOnly = tokens.length > 0 && tokens.every((w) => /^(ADJ|FXD|PTO|SHADOWLINE|TO|CEILING)$/.test(w));
+        const hasDeep = /\bDEEP\b/.test(text); // drawer-depth tags (e.g. 'B' 350 DEEP) = base drawers
+        const hasDoors = /FARMERS|UNDERPANEL|HANG|\bLED\b/.test(text);
+        if (shelfOnly) {
+          vote.is_full_height = true;
+          vote.has_base_cabinets = false;
+          vote.has_wall_cabinets = false;
+        } else if (hasDeep) {
+          vote.is_full_height = false;
+          vote.has_base_cabinets = true;
+          if (hasDoors) vote.has_wall_cabinets = true;
+        }
         if (/fridge|freezer/i.test(c.label)) vote.is_fridge_column = true;
         if (c.width < 60) vote.is_gap = true;
         let kind = "gap";
