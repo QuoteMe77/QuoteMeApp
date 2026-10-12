@@ -508,6 +508,7 @@ export default function QuoteBuilder({
     column_warnings?: string[];
     column_source?: string;
     dim_note?: string;
+    column_base?: { items: PlanItemResult[] };
   } | null>(null);
   const [selectedPlanItems, setSelectedPlanItems] = useState<Set<number>>(new Set());
   // index -> chosen price_book_items.id for base/wall/tall items awaiting a material pick
@@ -1253,6 +1254,29 @@ export default function QuoteBuilder({
   };
   const [pdfPicker, setPdfPicker] = useState<PdfPicker | null>(null);
 
+  // Lets the estimator correct a column's type (e.g. a full-height shelving
+  // unit the AI called base+wall) and recomputes the base / wall / tall
+  // lengths from the widths — the widths themselves are never editable.
+  function setColumnKind(wi: number, ci: number, kind: string) {
+    setPlanResult((prev) => {
+      if (!prev || !prev.column_report || !prev.column_base) return prev;
+      const walls = prev.column_report.map((w, i) => ({
+        room: w.room,
+        name: w.name,
+        page: w.page,
+        overall_mm: w.overall,
+        columns: w.columns.map((c, j) => (i === wi && j === ci ? { ...c, kind } : c)),
+      }));
+      const inv = applyColumnInventory(prev.column_base.items, walls);
+      return {
+        ...prev,
+        items: flagMatchingBandLengths(inv.items),
+        column_report: inv.report,
+        column_warnings: inv.warnings,
+      };
+    });
+  }
+
   async function runPlanRead(planFile: File, scheduleFile: File | null) {
     setPlanUploading(true);
     setPlanError(null);
@@ -1350,6 +1374,7 @@ export default function QuoteBuilder({
         const inv = applyColumnInventory(merged, data.walls);
         data.items = flagMatchingBandLengths(inv.items);
         data.column_report = inv.report;
+        data.column_base = { items: merged };
         data.column_warnings = inv.warnings;
       }
       // If more than one room label survives reconciliation, this wasn't a
@@ -2156,7 +2181,7 @@ export default function QuoteBuilder({
             {planResult.column_report && planResult.column_report.length > 0 && (
               <details className="border border-line rounded-md p-3 mb-3 text-xs">
                 <summary className="cursor-pointer font-medium">
-                  Column breakdown — how base / wall / tall lengths were added up
+                  Column breakdown — how base / wall / tall lengths were added up (you can correct a column's type here)
                 </summary>
                 <p className="mt-2 text-ink-soft">
                   Widths from:{" "}
@@ -2177,7 +2202,19 @@ export default function QuoteBuilder({
                           {w.columns.map((c, ci) => (
                             <tr key={ci} className="border-t border-line">
                               <td className="py-0.5 pr-3 text-right tabular-nums">{c.width_mm}</td>
-                              <td className="py-0.5 pr-3">{c.kind}</td>
+                              <td className="py-0.5 pr-3">
+                                <select
+                                  value={c.kind}
+                                  onChange={(e) => setColumnKind(wi, ci, e.target.value)}
+                                  className="border border-line rounded px-1 py-0.5 bg-transparent"
+                                >
+                                  {["base", "base_wall", "wall", "tall", "gap"].map((k) => (
+                                    <option key={k} value={k}>
+                                      {k === "base_wall" ? "base + wall" : k}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
                               <td className="py-0.5 text-ink-soft">{c.label}</td>
                             </tr>
                           ))}

@@ -492,6 +492,7 @@ export async function POST(request: NextRequest) {
   - is_full_height: ONE unbroken floor-to-ceiling carcase (pantry, broom cupboard, or an integrated fridge/freezer housing with its doors above)?
   - is_fridge_column: contains an integrated fridge or freezer?
   - is_gap: a spacer, filler, end panel or anything that is not joinery (very narrow strips are almost always this).
+Hint from this business's drawings: a column whose only printed notes are shelf notes (ADJ = adjustable shelf, FXD = fixed shelf), with no drawer tags ("B 350 DEEP" etc.), no door-style or underpanel notes, and which the benchtop line does not cross, is a full-height shelving unit (is_full_height true, has_base_cabinets false, has_wall_cabinets false).
 Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_base_cabinets": true, "has_wall_cabinets": false, "is_full_height": false, "is_fridge_column": false, "is_gap": false } ] } ] } with one entry per listed elevation and one per listed column, in the same order.`;
 
   function describeDimStrings(): string {
