@@ -255,7 +255,7 @@ export async function POST(request: NextRequest) {
     job_address?: string;
     items: PlanItem[];
     flags: string[];
-    walls?: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[] }[];
+    walls?: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number> }[];
   };
 
   // A single vision read of a complex multi-page plan isn't deterministic —
@@ -547,7 +547,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
   }
 
   function consensusFixed(reads: FlagCol[][][]): {
-    walls: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[] }[];
+    walls: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number> }[];
     warnings: string[];
   } {
     const warnings: string[] = [];
@@ -561,8 +561,17 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
       groups.set(k, [...(groups.get(k) || []), wi]);
     });
     const walls = Array.from(groups.values()).map((members, gi) => {
-      const first = dimStrings[members[0]];
+      // The copy of this elevation with the most printed text is the one used
+      // for reading notes (a mirrored copy on another sheet may have fewer).
+      const labelChars = (wi: number) => dimStrings[wi].columns.reduce((a, c) => a + (c.label || "").length, 0);
+      const bestMember = members.reduce((b, wi) => (labelChars(wi) > labelChars(b) ? wi : b), members[0]);
+      const first = dimStrings[bestMember];
+      members.splice(members.indexOf(bestMember), 1);
+      members.unshift(bestMember);
       const n = first.columns.length;
+      let drawerTags = 0;
+      const drawerList: string[] = [];
+      const ptoByKind: Record<string, number> = {};
       const name = `Elevation ${gi + 1} (page ${first.page}, ${first.overall}mm)`;
       const columns = first.columns.map((c, ci) => {
         const vote: Record<string, boolean> = {};
@@ -614,9 +623,25 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
         else if (vote.has_base_cabinets && vote.has_wall_cabinets) kind = "base_wall";
         else if (vote.has_base_cabinets) kind = "base";
         else if (vote.has_wall_cabinets) kind = "wall";
+        // Counts read straight from the printed text of this column (one copy only).
+        const own = (c.label || "").toUpperCase();
+        const tags = own.match(/'?[A-Z]'?\s+\d{3}\s+DEEP/g) || [];
+        drawerTags += tags.length;
+        drawerList.push(...tags);
+        const ptoHere = (own.match(/\bPTO\b/g) || []).length;
+        if (ptoHere > 0) ptoByKind[kind] = (ptoByKind[kind] || 0) + ptoHere;
         return { width_mm: c.width, kind, label: c.label };
       });
-      return { room: "", name, page: first.page, overall_mm: first.overall, columns };
+      return {
+        room: "",
+        name,
+        page: first.page,
+        overall_mm: first.overall,
+        columns,
+        drawer_tags: drawerTags,
+        drawer_detail: drawerList.join(", "),
+        pto: ptoByKind,
+      };
     });
     return { walls, warnings };
   }

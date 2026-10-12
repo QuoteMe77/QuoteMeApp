@@ -1247,6 +1247,55 @@ export default function QuoteBuilder({
   };
   const [pdfPicker, setPdfPicker] = useState<PdfPicker | null>(null);
 
+  // Counts read straight from the PDF's printed text (drawer-depth tags such as
+  // 'B' 350 DEEP, and PTO notes) — these override the AI's estimates and are
+  // noted on the items so they can be checked.
+  function applyTextCounts(
+    items: PlanItemResult[],
+    walls: { room?: string; name?: string; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number> }[] | undefined
+  ): PlanItemResult[] {
+    if (!Array.isArray(walls)) return items;
+    const lm = items.filter((it) => it.calc === "LM" && ["base", "wall", "tall"].includes(it.cabinet_type));
+    const rooms = Array.from(new Set(lm.map((it) => it.room.trim().toLowerCase())));
+    const out = [...items];
+    const roomOf = (w: { room?: string }) => {
+      const r = (w.room || "").trim().toLowerCase();
+      return rooms.includes(r) ? r : rooms.length === 1 ? rooms[0] : r;
+    };
+    const find = (room: string, type: string) =>
+      out.findIndex((it) => it.calc === "LM" && it.cabinet_type === type && it.room.trim().toLowerCase() === room);
+    const drawers = new Map<string, { n: number; detail: string[] }>();
+    for (const w of walls) {
+      const room = roomOf(w);
+      if ((w.drawer_tags || 0) > 0) {
+        const d = drawers.get(room) || { n: 0, detail: [] };
+        d.n += w.drawer_tags || 0;
+        d.detail.push(`${w.name}: ${w.drawer_tags}`);
+        drawers.set(room, d);
+      }
+      for (const [kind, n] of Object.entries(w.pto || {})) {
+        if (!n) continue;
+        const type = kind === "base_wall" ? "wall" : kind;
+        let idx = find(room, type);
+        if (idx < 0) idx = out.findIndex((it) => it.calc === "LM" && it.room.trim().toLowerCase() === room);
+        if (idx >= 0) {
+          out[idx] = { ...out[idx], note: [out[idx].note, `${n}x PTO (push to open) — counted from the drawing text`].filter(Boolean).join("; ") };
+        }
+      }
+    }
+    for (const [room, d] of drawers) {
+      const idx = find(room, "base");
+      if (idx >= 0) {
+        out[idx] = {
+          ...out[idx],
+          drawer_count: d.n,
+          note: [out[idx].note, `${d.n} drawers counted from the drawing text (${d.detail.join("; ")})`].filter(Boolean).join("; "),
+        };
+      }
+    }
+    return out;
+  }
+
   // Lets the estimator correct a column's type (e.g. a full-height shelving
   // unit the AI called base+wall) and recomputes the base / wall / tall
   // lengths from the widths — the widths themselves are never editable.
@@ -1363,7 +1412,7 @@ export default function QuoteBuilder({
       if (Array.isArray(data.items)) {
         const reconciled = reconcileRoomLabels(data.items as PlanItemResult[]);
         roomLabels = reconciled.roomLabels;
-        const merged = mergePlanBands(reconciled.items);
+        const merged = applyTextCounts(mergePlanBands(reconciled.items), data.walls);
         const inv = applyColumnInventory(merged, data.walls);
         data.items = flagMatchingBandLengths(inv.items);
         data.column_report = inv.report;
