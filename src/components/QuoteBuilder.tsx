@@ -1321,7 +1321,18 @@ export default function QuoteBuilder({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ planPath, schedulePath, dimensionStrings, dimNote: dim.note }),
       });
-      const data = await res.json();
+      const rawBody = await res.text();
+      let data: any;
+      try {
+        data = JSON.parse(rawBody);
+      } catch {
+        // Not JSON: usually the host cutting the request off at its time
+        // limit (the page then holds an error message, not our JSON).
+        setPlanError(
+          `The server stopped before finishing the read (status ${res.status}) — usually a time-out on a large or busy read. Try selecting just the page(s) you need. ${rawBody.slice(0, 80).replace(/<[^>]*>/g, " ").trim()}`
+        );
+        return;
+      }
       if (!res.ok) {
         setPlanError(data.error || "Could not read this plan.");
         return;
@@ -1394,8 +1405,10 @@ export default function QuoteBuilder({
       });
       setPlanItemMaterial(defaults);
       setPlanItemFlag(flags);
-    } catch {
-      setPlanError("Upload failed. Check your connection and try again.");
+    } catch (err) {
+      console.error("Plan read failed:", err);
+      const detail = err instanceof Error ? err.message : String(err);
+      setPlanError(`The plan could not be read (${detail.slice(0, 160)}). If this keeps happening, tell Claude the exact message.`);
     } finally {
       setPlanUploading(false);
     }

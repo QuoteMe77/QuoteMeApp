@@ -579,7 +579,9 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
 
   const [resultA, resultB, colA, colB, colC, fixA, fixB, fixC] = await Promise.all([
     readOnce(),
-    readOnce(),
+    // With exact widths from the PDF text the second full read is only a
+    // cross-check; skipping it keeps long reads inside the time limit.
+    dimStrings.length ? Promise.resolve({ parsed: null, error: "skipped" } as { parsed: null; error: string }) : readOnce(),
     dimStrings.length ? Promise.resolve(null) : readColumnsOnce(),
     dimStrings.length ? Promise.resolve(null) : readColumnsOnce(),
     dimStrings.length ? Promise.resolve(null) : readColumnsOnce(),
