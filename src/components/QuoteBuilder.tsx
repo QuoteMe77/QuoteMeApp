@@ -217,7 +217,13 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
         const e = tr[4];
         const f = tr[5];
         const rotated = Math.abs(tr[1]) > 0.01 && Math.abs(tr[1]) >= Math.abs(tr[0]);
-        const y = viewport.height - f - (raw.height || 0) / 2;
+        // Rotated text runs along the page's vertical axis: its centre is half its
+        // WIDTH up/down from the baseline start; horizontal text is half its height.
+        const y = rotated
+          ? tr[1] > 0
+            ? viewport.height - f - raw.width / 2
+            : viewport.height - f + raw.width / 2
+          : viewport.height - f - (raw.height || 0) / 2;
         const parts = str.split(/\s+/);
         if (parts.length > 1 && parts.every((t) => /^\d+(\.\d+)?$/.test(t))) {
           // several figures in one text run: split by character share
@@ -236,7 +242,7 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
         const n = /^\d+(\.\d+)?$/.test(w.str) ? parseFloat(w.str) : 0;
         if (n >= 300 && bigNums.length < 8) bigNums.push(n);
       }
-      out.push(...findDimensionStrings(words, i, viewport.width));
+      out.push(...findDimensionStrings(words, i, viewport.width, viewport.height));
     }
     // Repeated copies of an elevation (e.g. a mirrored view on another page) are all
     // kept: the server pools the AI's votes across copies and counts the wall once.
@@ -331,7 +337,9 @@ type Calc = "LM" | "QTY" | "MISC";
 // One elevation's column inventory as transcribed by the AI (printed widths +
 // what kind of cabinetry each column is), plus what the application worked
 // out from it. The AI only copies figures; all adding-up happens in code.
+type ColumnGeom = { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[] };
 type ColumnReport = {
+  geom?: ColumnGeom;
   name: string;
   room: string;
   page: number;
@@ -1088,7 +1096,7 @@ export default function QuoteBuilder({
   function applyColumnInventory(
     items: PlanItemResult[],
     walls:
-      | { room?: string; name?: string; page?: number; overall_mm?: number; columns?: { width_mm: number; kind: string; label?: string }[] }[]
+      | { room?: string; name?: string; page?: number; overall_mm?: number; columns?: { width_mm: number; kind: string; label?: string }[]; geom?: ColumnGeom }[]
       | undefined
   ): { items: PlanItemResult[]; report: ColumnReport[]; warnings: string[] } {
     const report: ColumnReport[] = [];
@@ -1119,6 +1127,7 @@ export default function QuoteBuilder({
         sum,
         ok,
         columns: cols,
+        geom: w.geom,
         base: sumOf(["base", "base_wall"]),
         wall: sumOf(["base_wall", "wall", "tall_wall"]),
         tall: sumOf(["tall", "tall_wall"]),
@@ -1253,6 +1262,76 @@ export default function QuoteBuilder({
   };
   const [pdfPicker, setPdfPicker] = useState<PdfPicker | null>(null);
 
+  // Places "View on plan" boxes from the drawing's own geometry instead of the
+  // AI's guess: each column's horizontal position (from the dimension string),
+  // the elevation's top and floor (from its tall vertical dimension), and what
+  // the column is (its type and printed notes). Items that can't be anchored
+  // keep the AI's own regions.
+  function anchorRegions(items: PlanItemResult[], report: ColumnReport[]): PlanItemResult[] {
+    const walls = report.filter((w) => w.geom && w.geom.frame && w.geom.cols.length === w.columns.length);
+    if (walls.length === 0) return items;
+    const PAD = 0.004;
+    type Box = { page: number; bbox: [number, number, number, number] };
+    const clamp = (n: number) => Math.min(1, Math.max(0, n));
+    // contiguous runs of matching columns (a narrow gap between two matches joins them)
+    const runs = (w: ColumnReport, pick: (c: ColumnReport["columns"][number], i: number) => boolean) => {
+      const out: [number, number][] = [];
+      let start = -1;
+      let last = -1;
+      w.columns.forEach((c, i) => {
+        if (pick(c, i)) {
+          if (start < 0) start = i;
+          last = i;
+        } else if (!(c.kind === "gap" && start >= 0)) {
+          if (start >= 0) out.push([start, last]);
+          start = -1;
+        }
+      });
+      if (start >= 0) out.push([start, last]);
+      return out;
+    };
+    const boxesFor = (
+      pick: (c: ColumnReport["columns"][number], i: number) => boolean,
+      zone: (k: number, top: number, bottom: number) => [number, number]
+    ): Box[] => {
+      const boxes: Box[] = [];
+      for (const w of walls) {
+        const g = w.geom!;
+        const f = g.frame!;
+        const k = (f.bottom - f.top) / f.mm; // page-height fraction per mm
+        for (const [a, b] of runs(w, pick)) {
+          const [y0, y1] = zone(k, f.top, f.bottom);
+          boxes.push({
+            page: g.page,
+            bbox: [clamp(g.cols[a].x0 - PAD), clamp(y0 - PAD), clamp(g.cols[b].x1 + PAD), clamp(y1 + PAD)],
+          });
+        }
+      }
+      return boxes;
+    };
+    const baseZone = (k: number, _t: number, bottom: number): [number, number] => [bottom - 930 * k, bottom];
+    const wallZone = (k: number, top: number, bottom: number): [number, number] => [top, bottom - 1500 * k];
+    const fullZone = (_k: number, top: number, bottom: number): [number, number] => [top, bottom];
+    const fridgeZone = (k: number, _t: number, bottom: number): [number, number] => [bottom - 1800 * k, bottom];
+    const ptoZone = (k: number, top: number, bottom: number): [number, number] => [top, bottom - 1800 * k];
+    const has = (c: { label?: string }, re: RegExp) => re.test((c.label || "").toUpperCase());
+
+    return items.map((it) => {
+      const name = it.name.toLowerCase();
+      let boxes: Box[] = [];
+      if (it.calc === "LM" && it.cabinet_type === "base") boxes = boxesFor((c) => c.kind === "base" || c.kind === "base_wall", baseZone);
+      else if (it.calc === "LM" && it.cabinet_type === "wall")
+        boxes = boxesFor((c) => c.kind === "base_wall" || c.kind === "wall" || c.kind === "tall_wall", wallZone);
+      else if (it.calc === "LM" && it.cabinet_type === "tall") boxes = boxesFor((c) => c.kind === "tall" || c.kind === "tall_wall", fullZone);
+      else if (/fridge|freezer/.test(name)) boxes = boxesFor((c) => has(c, /FRIDGE|FREEZER/), fridgeZone);
+      else if (/dish/.test(name)) boxes = boxesFor((c) => has(c, /DISH/), baseZone);
+      else if (/\bbin\b/.test(name)) boxes = boxesFor((c) => has(c, /\bBIN\b/), baseZone);
+      else if (/^drawers\b/.test(name)) boxes = boxesFor((c) => has(c, /\bDEEP\b/), baseZone);
+      else if (/\bpto\b|push.to.open/.test(name)) boxes = boxesFor((c) => has(c, /\bPTO\b/), ptoZone);
+      return boxes.length > 0 ? { ...it, regions: boxes } : it;
+    });
+  }
+
   // Drawers get their own line in the list (so they can't be missed), priced
   // from the drawer hardware rows, instead of being a hidden count on the
   // cabinet run. The run's own drawer count is cleared so nothing is priced twice.
@@ -1383,12 +1462,13 @@ export default function QuoteBuilder({
         name: w.name,
         page: w.page,
         overall_mm: w.overall,
+        geom: w.geom,
         columns: w.columns.map((c, j) => (i === wi && j === ci ? { ...c, kind } : c)),
       }));
       const inv = applyColumnInventory(prev.column_base.items, walls);
       return {
         ...prev,
-        items: flagMatchingBandLengths(inv.items),
+        items: anchorRegions(flagMatchingBandLengths(inv.items), inv.report),
         column_report: inv.report,
         column_warnings: inv.warnings,
       };
@@ -1490,7 +1570,7 @@ export default function QuoteBuilder({
         roomLabels = reconciled.roomLabels;
         const merged = splitDrawersOut(applyTextCounts(mergePlanBands(reconciled.items), data.walls));
         const inv = applyColumnInventory(merged, data.walls);
-        data.items = flagMatchingBandLengths(inv.items);
+        data.items = anchorRegions(flagMatchingBandLengths(inv.items), inv.report);
         data.column_report = inv.report;
         data.column_base = { items: merged };
         data.column_warnings = inv.warnings;

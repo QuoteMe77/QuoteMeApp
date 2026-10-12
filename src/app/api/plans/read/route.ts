@@ -170,7 +170,7 @@ export async function POST(request: NextRequest) {
   const schedulePath: unknown = body?.schedulePath;
   // Exact column widths read from the PDF's own text layer by the browser
   // (see lib/dimensionRows.ts). Empty for scans/images.
-  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string }[] };
+  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string }[]; frame?: { top: number; bottom: number; mm: number } };
   const dimStrings: DimStr[] = Array.isArray(body?.dimensionStrings)
     ? (body.dimensionStrings as DimStr[]).filter(
         (d) =>
@@ -255,7 +255,7 @@ export async function POST(request: NextRequest) {
     job_address?: string;
     items: PlanItem[];
     flags: string[];
-    walls?: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number> }[];
+    walls?: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number>; geom?: { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[] } }[];
   };
 
   // A single vision read of a complex multi-page plan isn't deterministic —
@@ -547,7 +547,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
   }
 
   function consensusFixed(reads: FlagCol[][][]): {
-    walls: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number> }[];
+    walls: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number>; geom?: { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[] } }[];
     warnings: string[];
   } {
     const warnings: string[] = [];
@@ -644,6 +644,14 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
         drawer_tags: drawerTags,
         drawer_detail: drawerList.join(", "),
         pto: ptoByKind,
+        geom: {
+          page: first.page,
+          frame:
+            first.frame && [first.frame.top, first.frame.bottom, first.frame.mm].every((n) => typeof n === "number")
+              ? first.frame
+              : undefined,
+          cols: first.columns.map((c) => ({ x0: c.x0, x1: c.x1 })),
+        },
       };
     });
     return { walls, warnings };

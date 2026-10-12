@@ -26,11 +26,14 @@ export type DimensionString = {
   page: number;
   overall: number;
   columns: DimColumn[];
+  // Vertical extent of the elevation as fractions of the page height, with the
+  // real-world height (mm) it represents — from the tall vertical dimension.
+  frame?: { top: number; bottom: number; mm: number };
 };
 
 const NUM = /^\d{1,5}(\.\d+)?$/;
 
-export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: number): DimensionString[] {
+export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: number, pageH = 0): DimensionString[] {
   const nums = words
     .filter((t) => !t.rotated && NUM.test(t.str.trim()))
     .map((t) => ({ v: parseFloat(t.str), xc: t.x + t.w / 2, y: t.y, x: t.x, w: t.w }));
@@ -101,7 +104,23 @@ export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: n
             .join(" ");
           return { width: n.v, x0: x0 / pageW, x1: x1 / pageW, label };
         });
-        out.push({ page: pageNo, overall: o.v, columns });
+        // Elevation height: the tallest vertical (rotated) dimension in 1.8-3.6m
+        // beside this elevation is centred on it, so the top and floor follow.
+        let frame: DimensionString["frame"] = undefined;
+        if (pageH > 0 && s > 0) {
+          const minX = first.x - 90, maxX = last.x + last.w + 90;
+          const cands = words.filter(
+            (t) => t.rotated && NUM.test(t.str.trim()) && parseFloat(t.str) >= 1800 && parseFloat(t.str) <= 3600 &&
+              t.x >= minX && t.x <= maxX && t.y > rowY - 330 && t.y < rowY + 5
+          );
+          if (cands.length > 0) {
+            const best = cands.reduce((b, t) => (parseFloat(t.str) > parseFloat(b.str) ? t : b), cands[0]);
+            const mm = parseFloat(best.str);
+            const half = (mm * s) / 2;
+            frame = { top: (best.y - half) / pageH, bottom: (best.y + half) / pageH, mm };
+          }
+        }
+        out.push({ page: pageNo, overall: o.v, columns, frame });
         break;
       }
     }
