@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 // latency on top of what was already a slow vision+PDF call. If this
 // project is on Vercel's Hobby plan, 60s may be the hard ceiling regardless
 // of this setting — worth checking if reads start timing out.
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const PLAN_PROMPT = `You are an experienced joinery estimator reviewing a construction document set (floor plans, elevations, joinery/cabinetry detail sheets, and — often within the same document — a finishes, fixtures & equipment (FFE) schedule or joinery finishes/hardware page) for a fit-out of any room type (kitchen, pantry, laundry, bathroom, wardrobe, and so on — don't assume kitchen). Read every page provided. The finishes schedule is the source of truth for materials/hardware — use it to resolve coded references (e.g. "L1", "PC1") and fill in finish/drawer brand even when nothing is tagged on the drawing itself — but never quote line items from the schedule directly; it only informs items found on the actual drawings.
 
@@ -280,8 +280,8 @@ export async function POST(request: NextRequest) {
         // to comfortably cover the thinking budget plus a full item list for
         // a busy multi-room plan; thinking requires temperature 1 (the
         // default here, left unset).
-        max_tokens: 12000,
-        thinking: { type: "enabled", budget_tokens: 6000 },
+        max_tokens: 10000,
+        thinking: { type: "enabled", budget_tokens: 4000 },
         messages: [
           {
             role: "user",
