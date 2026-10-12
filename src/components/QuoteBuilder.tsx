@@ -1676,12 +1676,21 @@ export default function QuoteBuilder({
     });
   }
 
+  async function pdfPageCountOver(file: File, n: number) {
+    try {
+      const d = await PDFDocument.load(await file.arrayBuffer());
+      return d.getPageCount() > n;
+    } catch {
+      return false;
+    }
+  }
+
   async function handlePlanUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
 
-    if (file.type === "application/pdf" && file.size > PDF_PICKER_THRESHOLD_BYTES) {
+    if (file.type === "application/pdf" && (file.size > PDF_PICKER_THRESHOLD_BYTES || (await pdfPageCountOver(file, 8)))) {
       openPdfPicker("plan", file);
       return;
     }
