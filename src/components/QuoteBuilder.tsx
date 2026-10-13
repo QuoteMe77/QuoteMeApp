@@ -2457,13 +2457,16 @@ export default function QuoteBuilder({
               </div>
             )}
             {planResult.column_warnings && planResult.column_warnings.length > 0 && (
-              <div className="bg-amber-50 border border-amber-300 rounded-md p-3 mb-3 text-xs text-amber-900">
-                <ul className="list-disc pl-4 space-y-0.5">
+              <details className="bg-amber-50 border border-amber-300 rounded-md p-3 mb-3 text-xs text-amber-900">
+                <summary className="cursor-pointer font-medium">
+                  {planResult.column_warnings.length} column check{planResult.column_warnings.length === 1 ? "" : "s"} (click to review)
+                </summary>
+                <ul className="list-disc pl-4 mt-1 space-y-0.5">
                   {planResult.column_warnings.map((w, i) => (
                     <li key={i}>{w}</li>
                   ))}
                 </ul>
-              </div>
+              </details>
             )}
             {planResult.column_report && planResult.column_report.length > 0 && (
               <details className="border border-line rounded-md p-3 mb-3 text-xs">
@@ -2515,23 +2518,50 @@ export default function QuoteBuilder({
                 </div>
               </details>
             )}
-            {planResult.consistency_warnings && planResult.consistency_warnings.length > 0 && (
-              <div className="bg-red-50 border border-red-300 rounded-md p-3 mb-3 text-xs text-red-800">
-                <span className="font-semibold">
-                  The plan was read twice and the two reads didn&apos;t fully agree —{" "}
-                </span>
+            {planResult.consistency_warnings && planResult.consistency_warnings.length > 0 && (() => {
+              const uniq = Array.from(new Set(planResult.consistency_warnings));
+              const major = uniq.filter((w) => /two independent reads|only one of two|could not be read/i.test(w));
+              const minor = uniq.filter((w) => !major.includes(w));
+              return (
+                <details className="bg-amber-50 border border-amber-300 rounded-md p-3 mb-3 text-xs text-amber-900">
+                  <summary className="cursor-pointer font-medium">
+                    {uniq.length} note{uniq.length === 1 ? "" : "s"} where the two reads of this plan didn&apos;t fully agree
+                    {major.length > 0 ? ` — ${major.length} worth a look` : ""} (click to review)
+                  </summary>
+                  {major.length > 0 && (
+                    <>
+                      <p className="mt-2 font-medium">Worth checking against the plan</p>
+                      <ul className="list-disc pl-4 mt-1 space-y-0.5">
+                        {major.map((w, i) => (
+                          <li key={i}>{w}</li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  {minor.length > 0 && (
+                    <details className="mt-2">
+                      <summary className="cursor-pointer">Column-level detail ({minor.length}) — already settled by majority vote</summary>
+                      <ul className="list-disc pl-4 mt-1 space-y-0.5">
+                        {minor.map((w, i) => (
+                          <li key={i}>{w}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </details>
+              );
+            })()}
+            {planResult.flags.length > 0 && (
+              <details className="bg-paper border border-line rounded-md p-3 mb-3 text-xs text-ink-soft">
+                <summary className="cursor-pointer font-medium text-ink">
+                  {planResult.flags.length} thing{planResult.flags.length === 1 ? "" : "s"} to double-check before quoting (click to review)
+                </summary>
                 <ul className="list-disc pl-4 mt-1 space-y-0.5">
-                  {planResult.consistency_warnings.map((w, i) => (
-                    <li key={i}>{w}</li>
+                  {planResult.flags.map((f, i) => (
+                    <li key={i}>{f}</li>
                   ))}
                 </ul>
-              </div>
-            )}
-            {planResult.flags.length > 0 && (
-              <div className="bg-paper border border-line rounded-md p-3 mb-3 text-xs text-ink-soft">
-                <span className="font-semibold text-brick">Double-check before quoting: </span>
-                {planResult.flags.join(" • ")}
-              </div>
+              </details>
             )}
             {planResult.items.length === 0 ? (
               <p className="text-sm text-ink-soft">No joinery items were identified on this plan.</p>
