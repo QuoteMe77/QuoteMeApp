@@ -8,7 +8,7 @@ import { downloadQuotePdf } from "@/lib/exportPdf";
 import { downloadQuoteDocx } from "@/lib/exportDocx";
 import { PDFDocument } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist";
-import { findDimensionStrings } from "@/lib/dimensionRows";
+import { normaliseFigure, findDimensionStrings } from "@/lib/dimensionRows";
 import type { DimensionString, TextWord } from "@/lib/dimensionRows";
 
 // Above this size, a PDF is routed through the page-picker instead of being
@@ -212,7 +212,7 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
       const tc = await (page as unknown as { getTextContent(): Promise<{ items: unknown[] }> }).getTextContent();
       const words: TextWord[] = [];
       for (const raw of tc.items as unknown as { str?: string; transform: number[]; width: number; height: number }[]) {
-        const str = (raw.str || "").trim();
+        const str = normaliseFigure((raw.str || "").trim());
         if (!str) continue;
         const tr = raw.transform;
         const e = tr[4];

@@ -33,6 +33,11 @@ export type DimensionString = {
 };
 
 const NUM = /^\d{1,5}(\.\d+)?$/;
+// "1,166" -> "1166" (thousands comma as printed by Archicad etc.)
+export function normaliseFigure(str: string) {
+  const t = str.trim();
+  return /^\d{1,2},\d{3}(\.\d+)?$/.test(t) ? t.replace(",", "") : t;
+}
 
 export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: number, pageH = 0): DimensionString[] {
   const nums = words
@@ -46,10 +51,13 @@ export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: n
   for (const o of sortedO) {
     if (o.v < 300) continue;
     // numbers on a row 4–45 units above this figure
-    const rowCands = nums.filter((n) => o.y - n.y >= 3 && o.y - n.y <= 45);
+    // Two drafting styles: the segment row sits ABOVE the overall (drawing above it,
+    // e.g. Vicello CAD) or BELOW it (drawing below it, e.g. Archicad sheets).
+    for (const dir of [1, -1] as const) {
+    const rowCands = nums.filter((n) => dir * (o.y - n.y) >= 3 && dir * (o.y - n.y) <= 45);
     // group into rows by y
     const rows: (typeof nums)[] = [];
-    for (const n of rowCands.sort((a, b) => b.y - a.y)) {
+    for (const n of rowCands.sort((a, b) => dir * (b.y - a.y))) {
       const r = rows.find((row) => Math.abs(row[0].y - n.y) <= 2.5);
       if (r) r.push(n);
       else rows.push([n]);
@@ -93,7 +101,9 @@ export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: n
         const mmSpan = o.v - first.v / 2 - last.v / 2;
         const s = mmSpan > 0 ? span / mmSpan : 0;
         const textWords = words.filter(
-          (t) => !t.rotated && !NUM.test(t.str.trim()) && t.y < rowY - 4 && t.y > rowY - 400
+          (t) =>
+            !t.rotated && !NUM.test(t.str.trim()) &&
+            (dir === 1 ? t.y < rowY - 4 && t.y > rowY - 400 : t.y > rowY + 4 && t.y < rowY + 400)
         );
         const columns: DimColumn[] = hit.map((n) => {
           const half = (n.v * s) / 2;
@@ -112,7 +122,7 @@ export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: n
           const minX = first.x - 90, maxX = last.x + last.w + 90;
           const cands = words.filter(
             (t) => t.rotated && NUM.test(t.str.trim()) && parseFloat(t.str) >= 1800 && parseFloat(t.str) <= 3600 &&
-              t.x >= minX && t.x <= maxX && t.y > rowY - 330 && t.y < rowY + 5
+              t.x >= minX && t.x <= maxX && (dir === 1 ? t.y > rowY - 330 && t.y < rowY + 5 : t.y > rowY - 5 && t.y < rowY + 330)
           );
           if (cands.length > 0) {
             const best = cands.reduce((b, t) => (parseFloat(t.str) > parseFloat(b.str) ? t : b), cands[0]);
@@ -131,9 +141,15 @@ export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: n
             ).length;
           });
         }
+        // Plan views and section strips also have segment rows; an elevation is the
+        // one with a tall vertical (height) dimension beside it, so that's required
+        // for the "row below the overall" style.
+        if (dir === -1 && !frame) break;
         out.push({ page: pageNo, overall: o.v, columns, frame });
         break;
       }
+    }
+    if (out.length > 0 && out[out.length - 1].overall === o.v && dir === 1) break;
     }
   }
   return out.sort((a, b) => a.columns[0].x0 - b.columns[0].x0);
