@@ -21,6 +21,9 @@ export type DimColumn = {
   x1: number;
   upper?: number; // ADJ/FXD notes printed high up (wall-cabinet zone)
   label: string; // any non-numeric text printed in this column's strip
+  // Set by analyseElevations (Archicad-style sheets): what the drawing's own height chain and
+  // labels say this column is — "base" | "wall" | "base_wall" | "tall" | "gap".
+  detKind?: string;
 };
 
 export type DimensionString = {
@@ -33,6 +36,8 @@ export type DimensionString = {
   // Sheet style (Archicad etc.) where the small end figures are end panels that
   // belong to the cabinetry, so they count toward its length.
   keepEnds?: boolean;
+  // Bands (tall / base / wall height ranges) worked out from the printed height chain.
+  det?: { floor: number; k: number; bands: { kind: "base" | "wall" | "tall"; lo: number; hi: number }[]; printed?: { wall?: number } };
 };
 
 const NUM = /^\d{1,5}(\.\d+)?$/;

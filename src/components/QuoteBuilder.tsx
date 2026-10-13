@@ -9,6 +9,8 @@ import { downloadQuoteDocx } from "@/lib/exportDocx";
 import { PDFDocument } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist";
 import { normaliseFigure, findDimensionStrings } from "@/lib/dimensionRows";
+import { analyseElevations, findDrawerView } from "@/lib/elevationBands";
+import type { DrawerView } from "@/lib/elevationBands";
 import type { DimensionString, TextWord } from "@/lib/dimensionRows";
 
 // Above this size, a PDF is routed through the page-picker instead of being
@@ -218,6 +220,39 @@ async function extractRadiusMarks(file: File): Promise<Map<number, { x: number; 
   return marks;
 }
 
+// Drawer counts read from the printed "DRAWER" / "INNER DRAWER" labels inside each sheet's
+// ELEVATION views (never a plan view or side section, which repeat the same drawers), with
+// a box around the labelled drawers for "View on plan".
+async function extractDrawerViews(file: File): Promise<Map<number, DrawerView>> {
+  const out = new Map<number, DrawerView>();
+  if (!/pdf/i.test(file.type) && !/\.pdf$/i.test(file.name)) return out;
+  try {
+    ensurePdfjsWorker();
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1 });
+      const tc = await (page as unknown as { getTextContent(): Promise<{ items: unknown[] }> }).getTextContent();
+      const words: TextWord[] = [];
+      let archicad = false; // figures printed like "1,166" / "(COS)" mark this sheet style
+      for (const raw of tc.items as unknown as { str?: string; transform: number[]; width: number; height: number }[]) {
+        const str = (raw.str || "").trim();
+        if (!str) continue;
+        if (/^\d{1,2},\d{3}/.test(str) || /\(COS\)/i.test(str)) archicad = true;
+        const tr = raw.transform;
+        const rotated = Math.abs(tr[1]) > 0.01 && Math.abs(tr[1]) >= Math.abs(tr[0]);
+        words.push({ str, x: tr[4], y: viewport.height - tr[5] - (raw.height || 0) / 2, w: raw.width, rotated });
+      }
+      if (!archicad) continue;
+      const dv = findDrawerView(words, i, viewport.width, viewport.height);
+      if (dv && dv.count > 0) out.set(i, dv);
+    }
+  } catch {
+    /* no drawer labels */
+  }
+  return out;
+}
+
 // Reads each sheet's title block ("TITLE: BED 2 WARDROBE") from the PDF's own text, so a
 // page can be tied to its room without trusting the AI's page numbers.
 async function extractPageTitles(file: File): Promise<Map<number, string>> {
@@ -305,7 +340,12 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
         if (n >= 300 && bigNums.length < 8) bigNums.push(n);
       }
       const found = findDimensionStrings(words, i, viewport.width, viewport.height);
-      if (sawComma) found.forEach((d) => (d.keepEnds = true));
+      if (sawComma) {
+        found.forEach((d) => (d.keepEnds = true));
+        // Archicad-style sheets print a height chain and labels that say exactly what each
+        // elevation is made of — worked out here, no AI needed.
+        analyseElevations(words, found, viewport.width, viewport.height);
+      }
       out.push(...found);
     }
     // Repeated copies of an elevation (e.g. a mirrored view on another page) are all
@@ -401,7 +441,13 @@ type Calc = "LM" | "QTY" | "MISC";
 // One elevation's column inventory as transcribed by the AI (printed widths +
 // what kind of cabinetry each column is), plus what the application worked
 // out from it. The AI only copies figures; all adding-up happens in code.
-type ColumnGeom = { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[] };
+type ColumnGeom = {
+  page: number;
+  frame?: { top: number; bottom: number; mm: number };
+  cols: { x0: number; x1: number }[];
+  // Bands read from the drawing's own height chain (see lib/elevationBands.ts).
+  det?: { floor: number; k: number; bands: { kind: "base" | "wall" | "tall"; lo: number; hi: number }[]; printed?: { wall?: number } };
+};
 type ColumnReport = {
   geom?: ColumnGeom;
   name: string;
@@ -1179,7 +1225,7 @@ export default function QuoteBuilder({
     const lmItems = items.filter((it) => it.calc === "LM" && ["base", "wall", "tall"].includes(it.cabinet_type));
     const itemRooms = Array.from(new Set(lmItems.map((it) => it.room.trim().toLowerCase())));
 
-    const totals = new Map<string, { base: number; wall: number; tall: number; parts: { base: string[]; wall: string[]; tall: string[] }; room: string }>();
+    const totals = new Map<string, { base: number; wall: number; tall: number; parts: { base: string[]; wall: string[]; tall: string[] }; room: string; det: boolean; allDet: boolean }>();
     for (const w of walls) {
       const cols = (Array.isArray(w.columns) ? w.columns : []).map((c) => ({
         width_mm: Number(c.width_mm) || 0,
@@ -1193,6 +1239,10 @@ export default function QuoteBuilder({
       const ok = !hasZero && (overall > 0 ? Math.abs(sum - overall) <= 2 : false);
       const sumOf = (kinds: string[]) => cols.filter((c) => kinds.includes(c.kind)).reduce((a, c) => a + c.width_mm, 0);
       const snapToOverall = (v: number) => (ok && v === sum && overall > 0 ? overall : v);
+      // A printed segment (e.g. the shaving cabinet's 1,339) beats the columns' rounded sum.
+      const printedWall = w.geom?.det?.printed?.wall;
+      const wallRaw = sumOf(["base_wall", "wall", "tall_wall"]);
+      const wallFinal = printedWall && Math.abs(printedWall - wallRaw) <= 3 ? printedWall : snapToOverall(wallRaw);
       const rep: ColumnReport = {
         name: w.name || "Wall",
         room: w.room || "",
@@ -1205,7 +1255,7 @@ export default function QuoteBuilder({
         // When every column belongs to the band, the printed overall (e.g. 1890) is the
         // answer, not the columns' rounded sum (1889).
         base: snapToOverall(sumOf(["base", "base_wall"])),
-        wall: snapToOverall(sumOf(["base_wall", "wall", "tall_wall"])),
+        wall: wallFinal,
         tall: snapToOverall(sumOf(["tall", "tall_wall"])),
       };
       report.push(rep);
@@ -1222,7 +1272,9 @@ export default function QuoteBuilder({
       if (!itemRooms.includes(roomKey)) roomKey = itemRooms.length === 1 ? itemRooms[0] : roomKey;
       const t =
         totals.get(roomKey) ||
-        { base: 0, wall: 0, tall: 0, parts: { base: [], wall: [], tall: [] }, room: roomKey };
+        { base: 0, wall: 0, tall: 0, parts: { base: [], wall: [], tall: [] }, room: roomKey, det: false, allDet: true };
+      if (w.geom?.det) t.det = true;
+      else t.allDet = false;
       t.base += rep.base;
       t.wall += rep.wall;
       t.tall += rep.tall;
@@ -1234,13 +1286,15 @@ export default function QuoteBuilder({
     }
 
     let out = [...items];
+    const createdBase = new Set<string>();
+    const dropItems = new Set<PlanItemResult>();
     for (const [roomKey, t] of totals) {
       for (const type of ["base", "wall", "tall"] as const) {
         const metres = Math.round(t[type]) / 1000;
         const existingIdx = out.findIndex(
           (it) => it.calc === "LM" && it.cabinet_type === type && it.room.trim().toLowerCase() === roomKey
         );
-        const colNote = t.parts[type].length > 0 ? `columns (mm) — ${t.parts[type].join("; ")}` : "";
+        const colNote = t.parts[type].length > 0 ? `columns (mm) — ${t.parts[type].join("; ")}${t.det ? " — read from the drawing's own height chain and labels" : ""}` : "";
         if (metres > 0 && existingIdx >= 0) {
           const it = out[existingIdx];
           const aiQty = it.qty;
@@ -1252,12 +1306,19 @@ export default function QuoteBuilder({
             duplicate_wall_warning: undefined,
           };
         } else if (metres > 0) {
+          // Falls back to ANY item in the room (e.g. a room where the AI listed only a fitting
+          // or a vanity) so the measured lengths are never silently dropped.
           const template =
             out.find((it) => it.calc === "LM" && it.room.trim().toLowerCase() === roomKey && it.cabinet_type === "base") ||
-            out.find((it) => it.calc === "LM" && it.room.trim().toLowerCase() === roomKey);
+            out.find((it) => it.calc === "LM" && it.room.trim().toLowerCase() === roomKey) ||
+            out.find((it) => it.room.trim().toLowerCase() === roomKey && !/stone|by others/i.test(it.name)) ||
+            out.find((it) => it.room.trim().toLowerCase() === roomKey);
           if (template) {
+            if (type === "base") createdBase.add(roomKey);
             out.push({
               ...template,
+              calc: "LM" as const,
+              material_hint: template.calc === "LM" ? template.material_hint : "",
               name: type === "base" ? "Base cabinet" : type === "wall" ? "Wall cabinet" : "Tall cabinet",
               cabinet_type: type,
               qty: metres,
@@ -1273,12 +1334,29 @@ export default function QuoteBuilder({
             });
           }
         } else if (existingIdx >= 0) {
-          warnings.push(
-            `The column inventory found no ${type} columns, but a ${type} cabinet item was listed (${out[existingIdx].qty} lm) — check it.`
-          );
+          if (t.allDet) {
+            // Every sheet of this room was read from the drawing's own height chain: it shows no
+            // such cabinets, so the AI's item is dropped rather than left to be priced.
+            dropItems.add(out[existingIdx]);
+            warnings.push(`${out[existingIdx].room}: removed the AI's ${type} cabinet (${out[existingIdx].qty} lm) — the drawing's own heights and labels show no ${type} cabinets there.`);
+          } else {
+            warnings.push(
+              `The column inventory found no ${type} columns, but a ${type} cabinet item was listed (${out[existingIdx].qty} lm) — check it.`
+            );
+          }
         }
       }
     }
+    if (dropItems.size > 0) out = out.filter((it) => !dropItems.has(it));
+    // A vanity the AI listed as ONE unit is replaced by the measured base / wall lengths
+    // (and the drawers line), so it isn't priced twice.
+    createdBase.forEach((roomKey) => {
+      const dropped = out.filter((it) => it.room.trim().toLowerCase() === roomKey && it.calc === "QTY" && it.cabinet_type === "other" && /vanity/i.test(it.name));
+      if (dropped.length > 0) {
+        out = out.filter((it) => !dropped.includes(it));
+        warnings.push(`${dropped[0].room}: replaced the AI's "${dropped[0].name}" (${dropped[0].qty} ${dropped[0].unit}) with the measured Base / Wall cabinet lengths and the drawers line.`);
+      }
+    });
     return { items: out, report, warnings };
   }
 
@@ -1306,7 +1384,8 @@ export default function QuoteBuilder({
         for (let j = i + 1; j < group.length; j++) {
           const a = group[i];
           const b = group[j];
-          if (a.qty > 0 && Math.abs(a.qty - b.qty) < 0.001) {
+          const measured = /height chain/i.test(a.note) && /height chain/i.test(b.note);
+          if (!measured && a.qty > 0 && Math.abs(a.qty - b.qty) < 0.001) {
             flagged.add(a);
             flagged.add(b);
           }
@@ -1369,16 +1448,23 @@ export default function QuoteBuilder({
     };
     const boxesFor = (
       pick: (c: ColumnReport["columns"][number], i: number) => boolean,
-      zone: (k: number, top: number, bottom: number) => [number, number]
+      zone: (k: number, top: number, bottom: number) => [number, number],
+      band?: "base" | "wall" | "tall"
     ): Box[] => {
       const boxes: Box[] = [];
       for (const w of walls) {
         if (curRoom && w.room && w.room.trim().toLowerCase() !== curRoom) continue;
         const g = w.geom!;
         const f = g.frame!;
-        const k = (f.bottom - f.top) / f.mm; // page-height fraction per mm
+        const det = g.det;
+        const k = det ? det.k : (f.bottom - f.top) / f.mm; // page-height fraction per mm
+        // Bands read from the drawing's own height chain give the exact vertical extent.
+        const detBand = det && band ? det.bands.find((b) => b.kind === band) : undefined;
+        if (det && band && !detBand) continue;
         for (const [a, b] of runs(w, pick)) {
-          const [y0, y1] = zone(k, f.top, f.bottom);
+          const [y0, y1] = detBand && det
+            ? [det.floor - Math.min(detBand.hi, band === "base" ? 1100 : detBand.hi) * k, det.floor - detBand.lo * k]
+            : zone(k, f.top, f.bottom);
           boxes.push({
             page: g.page,
             bbox: [clamp(g.cols[a].x0 - PAD), clamp(y0 - PAD), clamp(g.cols[b].x1 + PAD), clamp(y1 + PAD)],
@@ -1398,10 +1484,10 @@ export default function QuoteBuilder({
       const name = it.name.toLowerCase();
       curRoom = (it.room || "").trim().toLowerCase();
       let boxes: Box[] = [];
-      if (it.calc === "LM" && it.cabinet_type === "base") boxes = boxesFor((c) => c.kind === "base" || c.kind === "base_wall", baseZone);
+      if (it.calc === "LM" && it.cabinet_type === "base") boxes = boxesFor((c) => c.kind === "base" || c.kind === "base_wall", baseZone, "base");
       else if (it.calc === "LM" && it.cabinet_type === "wall")
-        boxes = boxesFor((c) => c.kind === "base_wall" || c.kind === "wall" || c.kind === "tall_wall", wallZone);
-      else if (it.calc === "LM" && it.cabinet_type === "tall") boxes = boxesFor((c) => c.kind === "tall" || c.kind === "tall_wall", fullZone);
+        boxes = boxesFor((c) => c.kind === "base_wall" || c.kind === "wall" || c.kind === "tall_wall", wallZone, "wall");
+      else if (it.calc === "LM" && it.cabinet_type === "tall") boxes = boxesFor((c) => c.kind === "tall" || c.kind === "tall_wall", fullZone, "tall");
       else if (/fridge|freezer/.test(name)) boxes = boxesFor((c) => has(c, /FRIDGE|FREEZER/), fridgeZone);
       else if (/dish/.test(name)) boxes = boxesFor((c) => has(c, /DISH/), baseZone);
       else if (/\bbin\b/.test(name)) boxes = boxesFor((c) => has(c, /\bBIN\b/), baseZone);
@@ -1458,7 +1544,8 @@ export default function QuoteBuilder({
   function assignWallRooms(
     items: PlanItemResult[],
     walls: { room?: string; page?: number }[] | undefined,
-    pageRoom: Map<number, string>
+    pageRoom: Map<number, string>,
+    pageTitles?: Map<number, string>
   ) {
     if (!Array.isArray(walls)) return;
     const rooms = new Map<string, Map<number, number>>();
@@ -1476,6 +1563,13 @@ export default function QuoteBuilder({
       const byTitle = pageRoom.get(pg);
       if (byTitle) {
         w.room = byTitle;
+        return;
+      }
+      // The sheet is titled for a room none of the listed items belong to: keep its walls out
+      // of every other room rather than guessing a neighbour.
+      const ownTitle = pageTitles?.get(pg);
+      if (ownTitle) {
+        w.room = `(sheet) ${ownTitle}`;
         return;
       }
       if (w.room && rooms.has(w.room.trim())) return;
@@ -1560,12 +1654,18 @@ export default function QuoteBuilder({
         out.push(it);
         continue;
       }
+      // Curved base / wall ends are part of the run's lineal metres (the curved column's width is
+      // included in the length), so they get no separate line. Only a TALL curved void box does.
+      if (/^curved end\s*-\s*(base|wall)/i.test(it.name)) continue;
       const room = it.room.trim();
       const key = room.toLowerCase();
       const boxes: { page: number; bbox: [number, number, number, number] }[] = [];
+      const ownPages = new Set((it.regions || []).map((r) => r.page));
+      const roomHasPages = Array.from(pageRoom.values()).includes(room);
       marks.forEach((list, page) => {
         const pr = pageRoom.get(page);
-        if (pr !== room) return;
+        // Prefer the sheet's own title block; if none is tied to this room, use the AI's own pages.
+        if (roomHasPages ? pr !== room : !ownPages.has(page)) return;
         list.forEach((m) => {
           const c = (n: number) => Math.min(1, Math.max(0, n));
           boxes.push({ page, bbox: [c(m.x - 0.075), c(m.y - 0.105), c(m.x + 0.095), c(m.y + 0.02)] });
@@ -1580,6 +1680,63 @@ export default function QuoteBuilder({
       done.add(key);
       out.push({ ...it, qty: boxes.length, regions: boxes, note: [it.note, `${boxes.length} curved end(s) — counted from the radius callouts on the drawing`].filter(Boolean).join("; ") });
     }
+    return out;
+  }
+
+  // One "Shadowline / Finger rail small job" per room, however many sheets mention it.
+  function dedupeSmallJobs(items: PlanItemResult[]): PlanItemResult[] {
+    const seen = new Set<string>();
+    return items.filter((it) => {
+      if (!/shadowline.*finger rail|finger rail.*shadowline/i.test(it.name)) return true;
+      const key = it.room.trim().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  // Drawers counted from the drawing's own "DRAWER" labels (elevation views only) replace the AI's
+  // estimate; the box on the plan sits around the labelled drawers.
+  function applyDrawerViews(items: PlanItemResult[], views: Map<number, DrawerView>, pageRoom: Map<number, string>): PlanItemResult[] {
+    if (views.size === 0) return items;
+    const byRoom = new Map<string, { n: number; boxes: { page: number; bbox: [number, number, number, number] }[] }>();
+    views.forEach((v, page) => {
+      const room = pageRoom.get(page);
+      if (!room) return;
+      const e = byRoom.get(room) || { n: 0, boxes: [] };
+      e.n += v.count;
+      e.boxes.push({ page, bbox: v.bbox });
+      byRoom.set(room, e);
+    });
+    let out = items.slice();
+    byRoom.forEach((e, room) => {
+      const key = room.trim().toLowerCase();
+      const inRoom = (it: PlanItemResult) => it.room.trim().toLowerCase() === key;
+      const existing = out.filter((it) => inRoom(it) && /^drawers\b/i.test(it.name) && !/push-to-open/i.test(it.name));
+      const brand = existing[0]?.drawer_brand || out.find((it) => inRoom(it) && it.drawer_brand)?.drawer_brand || "";
+      out = out.filter((it) => !existing.includes(it));
+      // A vanity the AI listed as one unit carries its own drawer count — cleared so nothing is priced twice.
+      out = out.map((it) => (inRoom(it) && it.drawer_count > 0 ? { ...it, drawer_count: 0, pto_drawer_count: 0 } : it));
+      const template = out.find((it) => inRoom(it) && it.calc === "LM") || out.find((it) => inRoom(it));
+      if (!template) return;
+      out.push({
+        ...template,
+        name: `Drawers — ${brand || "Merivo"}`,
+        cabinet_type: "other",
+        calc: "QTY",
+        qty: e.n,
+        unit: "ea",
+        material_hint: "",
+        drawer_count: 0,
+        pto_drawer_count: 0,
+        drawer_brand: brand,
+        open: false,
+        note: `${e.n} drawers counted from the drawing's own DRAWER labels (front / internal elevations only — plan views and side sections are not counted)`,
+        confidence: "high",
+        duplicate_wall_warning: undefined,
+        regions: e.boxes,
+      });
+    });
     return out;
   }
 
@@ -1843,10 +2000,14 @@ export default function QuoteBuilder({
         roomLabels = reconciled.roomLabels;
         const pageTitles = await extractPageTitles(planFile);
         const pageRoom = roomsByPageTitle(reconciled.items, pageTitles);
-        assignWallRooms(reconciled.items, data.walls, pageRoom);
+        assignWallRooms(reconciled.items, data.walls, pageRoom, pageTitles);
         reconciled.items = filterRegionsByRoom(reconciled.items, pageRoom);
-        reconciled.items = applyCurveMarks(reconciled.items, await extractRadiusMarks(planFile), pageRoom);
-        const merged = splitDrawersOut(applyTextCounts(mergePlanBands(reconciled.items), data.walls));
+        reconciled.items = dedupeSmallJobs(applyCurveMarks(reconciled.items, await extractRadiusMarks(planFile), pageRoom));
+        const merged = applyDrawerViews(
+          splitDrawersOut(applyTextCounts(mergePlanBands(reconciled.items), data.walls)),
+          await extractDrawerViews(planFile),
+          pageRoom
+        );
         const inv = applyColumnInventory(merged, data.walls);
         data.items = anchorRegions(flagMatchingBandLengths(inv.items), inv.report);
         data.column_report = inv.report;

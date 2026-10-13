@@ -70,7 +70,7 @@ For each item, return:
 - "material_hint": the finish as fully described (material, thickness, profile, range, colour — e.g. "22mm Farmers Doors Weathered Slimline Oak Stained"). For non-cabinet items, whatever distinguishing detail is given. Carry over every descriptive word — this is matched against a price book by exact words. Empty string only if truly nothing is stated.
 - "drawer_count": sum of every brand/size-coded drawer-front tag on the run, each counted once (e.g. "2x ANT M" + "4x ANT D" = 6). Count drawer tags on EVERY elevation of the room and in every column of the base run, including a lone drawer tag (e.g. "D 350 DEEP") sitting beneath or beside an appliance such as a dish drawer — write the per-elevation split in the note (e.g. "left 1 + right 6"). A cross-section/detail view of the same bank shown elsewhere is the SAME drawers — don't recount. A section labelled only with a fitting's name (e.g. "HAMPER") and no drawer brand/size code of its own is that fitting's opening, not a drawer — price it as its own QTY item, add nothing to drawer_count for it.
 - "pto_drawer_count": how many of drawer_count are push-to-open — only set this when PTO is explicitly noted against the DRAWERS themselves ("PTO" most often labels wall-cabinet DOORS instead, which just gets a note, not this field, and no separate price-book line). Either way — on drawers or on doors — PTO ("Push To Open") must never be silently dropped: count how many PTO labels appear (e.g. two separate "PTO" tags means 2, not 1) and say so explicitly in that item's "note" (e.g. "2x PTO doors"), even when it only affects pto_drawer_count's own item and not a cabinet it's merely adjacent to.
-- CURVED ENDS: a plan view that shows a rounded/radiused corner or end on the joinery, usually labelled with a radius callout such as "R 300" or "R300", means that unit has a curved end. Report each curved end as its OWN item with calc "QTY", unit "ea", cabinet_type "other" and qty = the number of curved ends shown (a wardrobe with one rounded end = 1). If the unit it belongs to is a TALL / full-height unit (wardrobe, pantry or linen tower, roughly 2m or taller), name it exactly "Curved end - tall curved void box". If it belongs to a base or wall unit, name it "Curved end - base" or "Curved end - wall" instead, and put the radius (e.g. "R300") in the note. Never fold a curve into the lineal-metre item — the curved end is extra to the straight run.
+- CURVED ENDS: a plan view that shows a rounded/radiused corner or end on the joinery, usually labelled with a radius callout such as "R 300" or "R300", means that unit has a curved end. Report each curved end as its OWN item with calc "QTY", unit "ea", cabinet_type "other" and qty = the number of curved ends shown (a wardrobe with one rounded end = 1). If the unit it belongs to is a TALL / full-height unit (wardrobe, pantry or linen tower, roughly 2m or taller), name it exactly "Curved end - tall curved void box". If it belongs to a base or wall unit (a vanity, a bench), do NOT report a separate curved item at all: the curved end's width is simply part of that run's lineal metres, so include its column in the base/wall length and mention "R300 curved end" in the note.
 - DRAWER COUNTING ON ELEVATION SHEETS: a sheet often shows the same unit several times (front elevation, INTERNAL elevation, side section, plan view). Count each drawer ONCE, from the internal elevation where the drawers are drawn open/labelled "DRAWER". NEVER add the drawers seen again in the side section (S01) or in a second copy of the same unit — they are the same drawers. A wardrobe whose internal elevation shows 2 + 2 + 1 + 1 drawer fronts has 6 drawers, not 10.
 - SHADOWLINE / FINGER RAIL: whenever joinery runs up to the ceiling with only a small gap above it (about 20mm, e.g. a bulkhead/door run with "20" dimensions at the very top), add ONE item per room named exactly "Shadowline / Finger rail small job", calc "QTY", unit "ea", qty 1, cabinet_type "other", with a note saying where (e.g. "20mm gap to ceiling above wardrobe"). Do not add it twice for the same room.
 - "drawer_brand": the brand/code exactly as written (e.g. "ANT", "MER") — don't expand or guess. Empty string if none stated.
@@ -173,7 +173,7 @@ export async function POST(request: NextRequest) {
   const schedulePath: unknown = body?.schedulePath;
   // Exact column widths read from the PDF's own text layer by the browser
   // (see lib/dimensionRows.ts). Empty for scans/images.
-  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string; upper?: number }[]; frame?: { top: number; bottom: number; mm: number }; keepEnds?: boolean };
+  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string; upper?: number; detKind?: string }[]; frame?: { top: number; bottom: number; mm: number }; keepEnds?: boolean; det?: { floor: number; k: number; bands: { kind: "base" | "wall" | "tall"; lo: number; hi: number }[]; printed?: { wall?: number } } };
   const dimStrings: DimStr[] = Array.isArray(body?.dimensionStrings)
     ? (body.dimensionStrings as DimStr[]).filter(
         (d) =>
@@ -258,7 +258,7 @@ export async function POST(request: NextRequest) {
     job_address?: string;
     items: PlanItem[];
     flags: string[];
-    walls?: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number>; geom?: { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[] } }[];
+    walls?: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number>; geom?: { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[]; det?: DimStr["det"] } }[];
   };
 
   // A single vision read of a complex multi-page plan isn't deterministic —
@@ -557,7 +557,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
   }
 
   function consensusFixed(reads: FlagCol[][][]): {
-    walls: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number>; geom?: { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[] } }[];
+    walls: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number>; geom?: { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[]; det?: DimStr["det"] } }[];
     warnings: string[];
   } {
     const warnings: string[] = [];
@@ -585,7 +585,10 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
       const name = `Elevation ${gi + 1} (page ${first.page}, ${first.overall}mm)`;
       const columns = first.columns.map((c, ci) => {
         const vote: Record<string, boolean> = {};
-        for (const f of COL_FIELDS_FIXED) {
+        // Archicad-style sheets: the drawing's own height chain and labels decided what this
+        // column is (see lib/elevationBands.ts) — no AI vote needed.
+        const detKind = first.det ? c.detKind : undefined;
+        for (const f of detKind ? ([] as unknown as typeof COL_FIELDS_FIXED) : COL_FIELDS_FIXED) {
           let yes = 0;
           let total = 0;
           for (const wi of members) {
@@ -641,6 +644,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
         else if (vote.has_base_cabinets && vote.has_wall_cabinets) kind = "base_wall";
         else if (vote.has_base_cabinets) kind = "base";
         else if (vote.has_wall_cabinets) kind = "wall";
+        if (detKind) kind = detKind;
         // Counts read straight from the printed text of this column (one copy only).
         const own = (c.label || "").toUpperCase();
         const tags = own.match(/'?[A-Z]'?\s+\d{3}\s+DEEP/g) || [];
@@ -679,12 +683,16 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
               ? first.frame
               : undefined,
           cols: first.columns.map((c) => ({ x0: c.x0, x1: c.x1 })),
+          det: first.det,
         },
       };
     });
     return { walls, warnings };
   }
 
+  // When every elevation on these sheets was classified from the drawing's own height chain
+  // there is nothing left for the AI to vote on — skip those calls (cheaper and repeatable).
+  const needAiColumns = dimStrings.length > 0 && !dimStrings.every((d) => d.det && d.columns.every((c) => c.detKind));
   const [resultA, resultB, colA, colB, colC, fixA, fixB, fixC] = await Promise.all([
     readOnce(),
     // With exact widths from the PDF text the second full read is only a
@@ -693,9 +701,9 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
     dimStrings.length ? Promise.resolve(null) : readColumnsOnce(),
     dimStrings.length ? Promise.resolve(null) : readColumnsOnce(),
     dimStrings.length ? Promise.resolve(null) : readColumnsOnce(),
-    dimStrings.length ? readFixedOnce() : Promise.resolve(null),
-    dimStrings.length ? readFixedOnce() : Promise.resolve(null),
-    dimStrings.length ? readFixedOnce() : Promise.resolve(null),
+    needAiColumns ? readFixedOnce() : Promise.resolve(null),
+    needAiColumns ? readFixedOnce() : Promise.resolve(null),
+    needAiColumns ? readFixedOnce() : Promise.resolve(null),
   ]);
   const fixedReads = [fixA, fixB, fixC].filter((r): r is FlagCol[][] => !!r);
 
@@ -717,8 +725,8 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
   const colReads = [colA, colB, colC].filter((r): r is RawWall[] => !!r && r.length > 0);
   let walls: ParsedPlan["walls"] = undefined;
   const colWarnings: string[] = [];
-  if (fixedReads.length > 0 || colReads.length > 0) {
-    const cons = fixedReads.length > 0 ? consensusFixed(fixedReads) : consensusWalls(colReads);
+  if (dimStrings.length > 0 || fixedReads.length > 0 || colReads.length > 0) {
+    const cons = dimStrings.length > 0 || fixedReads.length > 0 ? consensusFixed(fixedReads) : consensusWalls(colReads);
     const rooms = Array.from(new Set(primary.items.map((i) => (i.room || "General").trim())));
     walls = cons.walls.map((w) => {
       const hit = primary.items.find((i) => (i.note || "").toLowerCase().includes(w.name.toLowerCase()));
@@ -730,7 +738,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
   return NextResponse.json({
     ...primary,
     walls,
-    column_source: fixedReads.length > 0 ? "pdf_text" : "ai_picture",
+    column_source: dimStrings.length > 0 ? "pdf_text" : "ai_picture",
     dim_note: typeof body?.dimNote === "string" ? body.dimNote.slice(0, 200) : "",
     consistency_warnings: [...consistencyWarnings, ...colWarnings],
   });
