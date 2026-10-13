@@ -192,6 +192,32 @@ const OVERVIEW_COLORS = [
   "#0891b2", "#db2777", "#65a30d", "#ea580c", "#4b5563",
 ];
 
+// Finds the radius callouts ("R 300") printed beside curved ends on plan views, as page
+// fractions, so a curved-end item can be boxed and counted from the drawing's own text.
+async function extractRadiusMarks(file: File): Promise<Map<number, { x: number; y: number }[]>> {
+  const marks = new Map<number, { x: number; y: number }[]>();
+  if (!/pdf/i.test(file.type) && !/\.pdf$/i.test(file.name)) return marks;
+  try {
+    ensurePdfjsWorker();
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1 });
+      const tc = await (page as unknown as { getTextContent(): Promise<{ items: unknown[] }> }).getTextContent();
+      for (const r of tc.items as unknown as { str?: string; transform: number[]; width: number }[]) {
+        if (/^R\s?\d{2,4}$/.test((r.str || "").trim())) {
+          const list = marks.get(i) || [];
+          list.push({ x: (r.transform[4] + r.width / 2) / viewport.width, y: (viewport.height - r.transform[5]) / viewport.height });
+          marks.set(i, list);
+        }
+      }
+    }
+  } catch {
+    /* no marks */
+  }
+  return marks;
+}
+
 // Reads each sheet's title block ("TITLE: BED 2 WARDROBE") from the PDF's own text, so a
 // page can be tied to its room without trusting the AI's page numbers.
 async function extractPageTitles(file: File): Promise<Map<number, string>> {
@@ -539,6 +565,7 @@ export default function QuoteBuilder({
   const [planUploading, setPlanUploading] = useState(false);
   const [planProgress, setPlanProgress] = useState("");
   const [expandedPlanItems, setExpandedPlanItems] = useState<Set<number>>(new Set());
+  const [removedPlanItems, setRemovedPlanItems] = useState<Set<number>>(new Set());
   const [planError, setPlanError] = useState<string | null>(null);
   const [planResult, setPlanResult] = useState<{
     items: PlanItemResult[];
@@ -653,6 +680,9 @@ export default function QuoteBuilder({
     }
     if (/dishwasher|dish\s*drawer/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("integration service - dishwasher")) || null;
+    }
+    if (/shadow\s*line.*finger|finger rail/.test(name) && !it.material_hint.trim()) {
+      return priceBook.find((p) => p.name.toLowerCase().includes("shadowline / finger rail small job")) || null;
     }
     if (/curved end.*tall|tall.*curved/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("curve - tall curved void box")) || null;
@@ -1162,6 +1192,7 @@ export default function QuoteBuilder({
       const hasZero = cols.some((c) => c.width_mm <= 0 && c.kind !== "gap");
       const ok = !hasZero && (overall > 0 ? Math.abs(sum - overall) <= 2 : false);
       const sumOf = (kinds: string[]) => cols.filter((c) => kinds.includes(c.kind)).reduce((a, c) => a + c.width_mm, 0);
+      const snapToOverall = (v: number) => (ok && v === sum && overall > 0 ? overall : v);
       const rep: ColumnReport = {
         name: w.name || "Wall",
         room: w.room || "",
@@ -1171,9 +1202,11 @@ export default function QuoteBuilder({
         ok,
         columns: cols,
         geom: w.geom,
-        base: sumOf(["base", "base_wall"]),
-        wall: sumOf(["base_wall", "wall", "tall_wall"]),
-        tall: sumOf(["tall", "tall_wall"]),
+        // When every column belongs to the band, the printed overall (e.g. 1890) is the
+        // answer, not the columns' rounded sum (1889).
+        base: snapToOverall(sumOf(["base", "base_wall"])),
+        wall: snapToOverall(sumOf(["base_wall", "wall", "tall_wall"])),
+        tall: snapToOverall(sumOf(["tall", "tall_wall"])),
       };
       report.push(rep);
       if (!ok) {
@@ -1513,6 +1546,43 @@ export default function QuoteBuilder({
     });
   }
 
+  // Curved ends: count and box them from the "R 300" callouts on the room's own sheets.
+  function applyCurveMarks(
+    items: PlanItemResult[],
+    marks: Map<number, { x: number; y: number }[]>,
+    pageRoom: Map<number, string>
+  ): PlanItemResult[] {
+    if (marks.size === 0) return items;
+    const out: PlanItemResult[] = [];
+    const done = new Set<string>();
+    for (const it of items) {
+      if (!/^curved end/i.test(it.name)) {
+        out.push(it);
+        continue;
+      }
+      const room = it.room.trim();
+      const key = room.toLowerCase();
+      const boxes: { page: number; bbox: [number, number, number, number] }[] = [];
+      marks.forEach((list, page) => {
+        const pr = pageRoom.get(page);
+        if (pr !== room) return;
+        list.forEach((m) => {
+          const c = (n: number) => Math.min(1, Math.max(0, n));
+          boxes.push({ page, bbox: [c(m.x - 0.075), c(m.y - 0.105), c(m.x + 0.095), c(m.y + 0.02)] });
+        });
+      });
+      if (boxes.length === 0) {
+        out.push(it);
+        continue;
+      }
+      // One line per room: the number of R callouts is the number of curved ends.
+      if (done.has(key)) continue;
+      done.add(key);
+      out.push({ ...it, qty: boxes.length, regions: boxes, note: [it.note, `${boxes.length} curved end(s) — counted from the radius callouts on the drawing`].filter(Boolean).join("; ") });
+    }
+    return out;
+  }
+
   function applyTextCounts(
     items: PlanItemResult[],
     walls: { room?: string; name?: string; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number> }[] | undefined
@@ -1622,6 +1692,7 @@ export default function QuoteBuilder({
     setPlanItemMaterial({});
     setPlanItemFlag({});
     setExpandedPlanItems(new Set());
+    setRemovedPlanItems(new Set());
     // Kept so the "View on plan" preview (below) can re-render the actual
     // page later and draw the AI's reported region on it — the server
     // deletes its copy of the upload right after reading it, so this is the
@@ -1774,6 +1845,7 @@ export default function QuoteBuilder({
         const pageRoom = roomsByPageTitle(reconciled.items, pageTitles);
         assignWallRooms(reconciled.items, data.walls, pageRoom);
         reconciled.items = filterRegionsByRoom(reconciled.items, pageRoom);
+        reconciled.items = applyCurveMarks(reconciled.items, await extractRadiusMarks(planFile), pageRoom);
         const merged = splitDrawersOut(applyTextCounts(mergePlanBands(reconciled.items), data.walls));
         const inv = applyColumnInventory(merged, data.walls);
         data.items = anchorRegions(flagMatchingBandLengths(inv.items), inv.report);
@@ -2729,7 +2801,8 @@ export default function QuoteBuilder({
                       byRoom.get(r)!.push(i);
                     });
                     return order.map((room) => {
-                      const idxs = byRoom.get(room)!;
+                      const idxs = byRoom.get(room)!.filter((i) => !removedPlanItems.has(i));
+                      if (idxs.length === 0) return null;
                       const ticked = idxs.filter((i) => selectedPlanItems.has(i)).length;
                       const roomNotes = (planResult.consistency_warnings || []).filter((w) => w.toUpperCase().includes(room.toUpperCase()));
                       return (
@@ -2917,6 +2990,21 @@ export default function QuoteBuilder({
                             </div>
                           )}
                         </div>
+                        <button
+                          type="button"
+                          className="text-brick text-xs px-2 py-1 shrink-0"
+                          title="Remove this line from the list"
+                          onClick={() => {
+                            setRemovedPlanItems((prev) => new Set(prev).add(i));
+                            setSelectedPlanItems((prev) => {
+                              const next = new Set(prev);
+                              next.delete(i);
+                              return next;
+                            });
+                          }}
+                        >
+                          ✕
+                        </button>
                       </div>
                     );
                             })}
