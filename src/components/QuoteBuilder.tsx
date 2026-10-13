@@ -211,8 +211,11 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
       // Cast: the installed pdfjs typings mark getTextContent's options as required.
       const tc = await (page as unknown as { getTextContent(): Promise<{ items: unknown[] }> }).getTextContent();
       const words: TextWord[] = [];
+      let sawComma = false;
       for (const raw of tc.items as unknown as { str?: string; transform: number[]; width: number; height: number }[]) {
-        const str = normaliseFigure((raw.str || "").trim());
+        const rawStr = (raw.str || "").trim();
+        if (/^\d{1,2},\d{3}/.test(rawStr) || /\(COS\)/i.test(rawStr)) sawComma = true;
+        const str = normaliseFigure(rawStr);
         if (!str) continue;
         const tr = raw.transform;
         const e = tr[4];
@@ -243,7 +246,9 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
         const n = /^\d+(\.\d+)?$/.test(w.str) ? parseFloat(w.str) : 0;
         if (n >= 300 && bigNums.length < 8) bigNums.push(n);
       }
-      out.push(...findDimensionStrings(words, i, viewport.width, viewport.height));
+      const found = findDimensionStrings(words, i, viewport.width, viewport.height);
+      if (sawComma) found.forEach((d) => (d.keepEnds = true));
+      out.push(...found);
     }
     // Repeated copies of an elevation (e.g. a mirrored view on another page) are all
     // kept: the server pools the AI's votes across copies and counts the wall once.

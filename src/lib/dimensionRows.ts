@@ -30,6 +30,9 @@ export type DimensionString = {
   // Vertical extent of the elevation as fractions of the page height, with the
   // real-world height (mm) it represents — from the tall vertical dimension.
   frame?: { top: number; bottom: number; mm: number };
+  // Sheet style (Archicad etc.) where the small end figures are end panels that
+  // belong to the cabinetry, so they count toward its length.
+  keepEnds?: boolean;
 };
 
 const NUM = /^\d{1,5}(\.\d+)?$/;

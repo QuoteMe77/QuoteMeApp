@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
   const schedulePath: unknown = body?.schedulePath;
   // Exact column widths read from the PDF's own text layer by the browser
   // (see lib/dimensionRows.ts). Empty for scans/images.
-  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string; upper?: number }[]; frame?: { top: number; bottom: number; mm: number } };
+  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string; upper?: number }[]; frame?: { top: number; bottom: number; mm: number }; keepEnds?: boolean };
   const dimStrings: DimStr[] = Array.isArray(body?.dimensionStrings)
     ? (body.dimensionStrings as DimStr[]).filter(
         (d) =>
@@ -648,6 +648,19 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
         if (ptoHere > 0) ptoByKind[kind] = (ptoByKind[kind] || 0) + ptoHere;
         return { width_mm: c.width, kind, label: c.label };
       });
+      // Archicad-style sheets: the small 40mm end figures are end panels that are part
+      // of the cabinetry, so they take the kind of the column next to them.
+      if (first.keepEnds) {
+        const near = (from: number, step: number) => {
+          for (let k = from; k >= 0 && k < columns.length; k += step) if (columns[k].kind !== "gap" && columns[k].width_mm >= 60) return columns[k].kind;
+          return "gap";
+        };
+        if (columns.length > 2) {
+          if (columns[0].width_mm < 60) columns[0].kind = near(1, 1);
+          const L = columns.length - 1;
+          if (columns[L].width_mm < 60) columns[L].kind = near(L - 1, -1);
+        }
+      }
       return {
         room: "",
         name,
