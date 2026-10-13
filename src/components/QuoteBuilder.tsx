@@ -617,6 +617,9 @@ export default function QuoteBuilder({
     if (/dishwasher|dish\s*drawer/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("integration service - dishwasher")) || null;
     }
+    if (/curved end.*tall|tall.*curved/.test(name)) {
+      return priceBook.find((p) => p.name.toLowerCase().includes("curve - tall curved void box")) || null;
+    }
     if (/^drawers\b/.test(name)) {
       return findDrawerHardware(it.drawer_brand || "", /push.to.open|\bpto\b/.test(name));
     }
