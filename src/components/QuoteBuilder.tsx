@@ -1282,6 +1282,7 @@ export default function QuoteBuilder({
     const walls = report.filter((w) => w.geom && w.geom.frame && w.geom.cols.length === w.columns.length);
     if (walls.length === 0) return items;
     const PAD = 0.004;
+    let curRoom = ""; // the item being placed — only walls from its own room may take its boxes
     type Box = { page: number; bbox: [number, number, number, number] };
     const clamp = (n: number) => Math.min(1, Math.max(0, n));
     // contiguous runs of matching columns (a narrow gap between two matches joins them)
@@ -1307,6 +1308,7 @@ export default function QuoteBuilder({
     ): Box[] => {
       const boxes: Box[] = [];
       for (const w of walls) {
+        if (curRoom && w.room && w.room.trim().toLowerCase() !== curRoom) continue;
         const g = w.geom!;
         const f = g.frame!;
         const k = (f.bottom - f.top) / f.mm; // page-height fraction per mm
@@ -1329,6 +1331,7 @@ export default function QuoteBuilder({
 
     return items.map((it) => {
       const name = it.name.toLowerCase();
+      curRoom = (it.room || "").trim().toLowerCase();
       let boxes: Box[] = [];
       if (it.calc === "LM" && it.cabinet_type === "base") boxes = boxesFor((c) => c.kind === "base" || c.kind === "base_wall", baseZone);
       else if (it.calc === "LM" && it.cabinet_type === "wall")
@@ -1384,6 +1387,46 @@ export default function QuoteBuilder({
   // Counts read straight from the PDF's printed text (drawer-depth tags such as
   // 'B' 350 DEEP, and PTO notes) — these override the AI's estimates and are
   // noted on the items so they can be checked.
+  // Walls read from the PDF text carry no room name. On a multi-room set, give each wall
+  // the room whose items are drawn on that wall's page, so lengths/drawers/PTO land on
+  // the right room instead of being dropped.
+  function assignWallRooms(items: PlanItemResult[], walls: { room?: string; page?: number }[] | undefined) {
+    if (!Array.isArray(walls)) return;
+    const rooms = new Map<string, Map<number, number>>();
+    items.forEach((it) => {
+      const room = it.room.trim();
+      if (!room) return;
+      const m = rooms.get(room) || new Map<number, number>();
+      (it.regions || []).forEach((r) => m.set(r.page, (m.get(r.page) || 0) + 1));
+      rooms.set(room, m);
+    });
+    if (rooms.size <= 1) return;
+    walls.forEach((w) => {
+      if (w.room && rooms.has(w.room.trim())) return;
+      const pg = w.page || 1;
+      let best = "";
+      let bestScore = 0;
+      rooms.forEach((m, room) => {
+        const score = m.get(pg) || 0;
+        if (score > bestScore) {
+          best = room;
+          bestScore = score;
+        }
+      });
+      if (!best) {
+        let bestD = Infinity;
+        rooms.forEach((m, room) => m.forEach((_c, page) => {
+          const d = Math.abs(page - pg);
+          if (d < bestD) {
+            bestD = d;
+            best = room;
+          }
+        }));
+      }
+      if (best) w.room = best;
+    });
+  }
+
   function applyTextCounts(
     items: PlanItemResult[],
     walls: { room?: string; name?: string; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number> }[] | undefined
@@ -1641,6 +1684,7 @@ export default function QuoteBuilder({
       if (Array.isArray(data.items)) {
         const reconciled = reconcileRoomLabels(data.items as PlanItemResult[]);
         roomLabels = reconciled.roomLabels;
+        assignWallRooms(reconciled.items, data.walls);
         const merged = splitDrawersOut(applyTextCounts(mergePlanBands(reconciled.items), data.walls));
         const inv = applyColumnInventory(merged, data.walls);
         data.items = anchorRegions(flagMatchingBandLengths(inv.items), inv.report);
