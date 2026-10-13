@@ -501,6 +501,7 @@ export default function QuoteBuilder({
 
   const [planUploading, setPlanUploading] = useState(false);
   const [planProgress, setPlanProgress] = useState("");
+  const [expandedPlanItems, setExpandedPlanItems] = useState<Set<number>>(new Set());
   const [planError, setPlanError] = useState<string | null>(null);
   const [planResult, setPlanResult] = useState<{
     items: PlanItemResult[];
@@ -1483,6 +1484,7 @@ export default function QuoteBuilder({
     setPlanResult(null);
     setPlanItemMaterial({});
     setPlanItemFlag({});
+    setExpandedPlanItems(new Set());
     // Kept so the "View on plan" preview (below) can re-render the actual
     // page later and draw the AI's reported region on it — the server
     // deletes its copy of the upload right after reading it, so this is the
@@ -2535,12 +2537,35 @@ export default function QuoteBuilder({
               <p className="text-sm text-ink-soft">No joinery items were identified on this plan.</p>
             ) : (
               <>
-                <div className="border border-line rounded-md divide-y divide-line max-h-96 overflow-y-auto mb-3">
+                <div className="flex gap-3 text-xs mb-1.5">
+                  <button type="button" className="text-ink-soft underline" onClick={() => setExpandedPlanItems(new Set(planResult.items.map((_, k) => k)))}>
+                    Expand all
+                  </button>
+                  <button type="button" className="text-ink-soft underline" onClick={() => setExpandedPlanItems(new Set())}>
+                    Collapse all
+                  </button>
+                </div>
+                <div className="border border-line rounded-md divide-y divide-line max-h-[70vh] overflow-y-auto mb-3">
                   {planResult.items.map((it, i) => {
                     const options = materialOptionsFor(it);
                     const showMaterialPicker = options.length > 0;
                     return (
                       <div key={i} className="flex items-start gap-2 px-3 py-2 text-sm hover:bg-paper">
+                        <button
+                          type="button"
+                          className="mt-0.5 w-5 text-ink-soft hover:text-ink shrink-0"
+                          title={expandedPlanItems.has(i) ? "Hide details" : "Show details, notes and material"}
+                          onClick={() =>
+                            setExpandedPlanItems((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(i)) next.delete(i);
+                              else next.add(i);
+                              return next;
+                            })
+                          }
+                        >
+                          {expandedPlanItems.has(i) ? "▾" : "▸"}
+                        </button>
                         <input
                           type="checkbox"
                           className="mt-1"
@@ -2615,6 +2640,17 @@ export default function QuoteBuilder({
                               </button>
                             )}
                           </div>
+                          {!expandedPlanItems.has(i) && (planItemFlag[i] || it.duplicate_wall_warning || (showMaterialPicker && !planItemMaterial[i])) && (
+                            <button
+                              type="button"
+                              className="text-xs text-brick mt-0.5 text-left"
+                              onClick={() => setExpandedPlanItems((prev) => new Set(prev).add(i))}
+                            >
+                              ⚠ {showMaterialPicker && !planItemMaterial[i] ? "pick a material · " : ""}needs a look — open to review
+                            </button>
+                          )}
+                          {expandedPlanItems.has(i) && (
+                            <div className="mt-1 pl-1 border-l-2 border-line space-y-1">
                           {it.duplicate_wall_warning && (
                             <span className="block text-xs font-medium text-red-600 mt-0.5">
                               ⚠ {it.duplicate_wall_warning}
@@ -2654,6 +2690,8 @@ export default function QuoteBuilder({
                                 </option>
                               ))}
                             </select>
+                          )}
+                            </div>
                           )}
                         </div>
                       </div>
