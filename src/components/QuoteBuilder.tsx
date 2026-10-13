@@ -2576,7 +2576,59 @@ export default function QuoteBuilder({
                   </button>
                 </div>
                 <div className="border border-line rounded-md divide-y divide-line max-h-[70vh] overflow-y-auto mb-3">
-                  {planResult.items.map((it, i) => {
+                  {(() => {
+                    const order: string[] = [];
+                    const byRoom = new Map<string, number[]>();
+                    planResult.items.forEach((it, i) => {
+                      const r = (it.room || "General").trim() || "General";
+                      if (!byRoom.has(r)) {
+                        byRoom.set(r, []);
+                        order.push(r);
+                      }
+                      byRoom.get(r)!.push(i);
+                    });
+                    return order.map((room) => {
+                      const idxs = byRoom.get(room)!;
+                      const ticked = idxs.filter((i) => selectedPlanItems.has(i)).length;
+                      const roomNotes = (planResult.consistency_warnings || []).filter((w) => w.toUpperCase().includes(room.toUpperCase()));
+                      return (
+                        <details key={room} className="group/room">
+                          <summary className="flex items-center gap-2 px-3 py-2 bg-paper cursor-pointer select-none list-none">
+                            <span className="text-ink-soft text-xs w-4">▸</span>
+                            <input
+                              type="checkbox"
+                              checked={ticked === idxs.length}
+                              ref={(el) => {
+                                if (el) el.indeterminate = ticked > 0 && ticked < idxs.length;
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                setSelectedPlanItems((prev) => {
+                                  const next = new Set(prev);
+                                  idxs.forEach((i) => (e.target.checked ? next.add(i) : next.delete(i)));
+                                  return next;
+                                });
+                              }}
+                              title="Tick / untick everything in this room"
+                            />
+                            <span className="font-semibold text-sm">{room}</span>
+                            <span className="text-xs text-ink-soft">
+                              {idxs.length} item{idxs.length === 1 ? "" : "s"} · {ticked} selected
+                            </span>
+                          </summary>
+                          <div className="divide-y divide-line">
+                            {roomNotes.length > 0 && (
+                              <details className="px-3 py-2 text-xs text-amber-900 bg-amber-50">
+                                <summary className="cursor-pointer">{roomNotes.length} note{roomNotes.length === 1 ? "" : "s"} for this room</summary>
+                                <ul className="list-disc pl-4 mt-1 space-y-0.5">
+                                  {Array.from(new Set(roomNotes)).map((w, k) => (
+                                    <li key={k}>{w}</li>
+                                  ))}
+                                </ul>
+                              </details>
+                            )}
+                            {idxs.map((i) => {
+                    const it = planResult.items[i];
                     const options = materialOptionsFor(it);
                     const showMaterialPicker = options.length > 0;
                     return (
@@ -2726,7 +2778,12 @@ export default function QuoteBuilder({
                         </div>
                       </div>
                     );
-                  })}
+                            })}
+                          </div>
+                        </details>
+                      );
+                    });
+                  })()}
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <button
