@@ -16,6 +16,7 @@ import type { DimensionString, TextWord } from "@/lib/dimensionRows";
 // 60-100MB, well past both Supabase Storage's 50MB free-plan ceiling and
 // Claude's own 32MB-per-PDF limit, and almost always contains far more than
 // the joinery-relevant sheets anyway.
+const PAGES_PER_READ = 5; // pages sent to the AI per request when reading a big set
 const PDF_PICKER_THRESHOLD_BYTES = 8 * 1024 * 1024;
 const UPLOAD_HARD_LIMIT_BYTES = 45 * 1024 * 1024; // stay under Supabase's 50MB cap with headroom
 // The Anthropic API itself caps a single request body at ~32MB. We send
@@ -499,6 +500,7 @@ export default function QuoteBuilder({
   };
 
   const [planUploading, setPlanUploading] = useState(false);
+  const [planProgress, setPlanProgress] = useState("");
   const [planError, setPlanError] = useState<string | null>(null);
   const [planResult, setPlanResult] = useState<{
     items: PlanItemResult[];
@@ -1492,7 +1494,8 @@ export default function QuoteBuilder({
     // picker) — catches the Anthropic request-size limit regardless of how
     // the files got here, rather than finding out from a 413 afterwards.
     const estimatedRequestBytes = estimateBase64Size(planFile.size) + estimateBase64Size(scheduleFile?.size ?? 0);
-    if (estimatedRequestBytes > ANTHROPIC_REQUEST_LIMIT_BYTES) {
+    const isPdfUpload = planFile.type === "application/pdf" || /\.pdf$/i.test(planFile.name);
+    if (!isPdfUpload && estimatedRequestBytes > ANTHROPIC_REQUEST_LIMIT_BYTES) {
       setPlanUploading(false);
       setPlanError(
         `This would send about ${(estimatedRequestBytes / (1024 * 1024)).toFixed(1)}MB to the AI once encoded — over its ~32MB request limit. Select fewer pages${
@@ -1512,53 +1515,113 @@ export default function QuoteBuilder({
         return;
       }
 
-      // Uploaded straight to storage from the browser, not through our own
-      // API route: Vercel's serverless functions reject any request body
-      // over ~4.5MB, and a real plan or schedule PDF routinely exceeds that.
-      const planPath = storagePathFor(user.id, planFile);
-      const { error: planUploadError } = await supabase.storage
-        .from("plan-uploads")
-        .upload(planPath, planFile, { contentType: planFile.type });
-      if (planUploadError) {
-        setPlanError("Could not upload the plan. Please try again.");
-        return;
-      }
-
-      let schedulePath: string | null = null;
-      if (scheduleFile) {
-        schedulePath = storagePathFor(user.id, scheduleFile);
-        const { error: scheduleUploadError } = await supabase.storage
-          .from("plan-uploads")
-          .upload(schedulePath, scheduleFile, { contentType: scheduleFile.type });
-        if (scheduleUploadError) {
-          setPlanError("Could not upload the finishes schedule. Please try again.");
-          return;
+      // Big drawing sets are read in chunks of PAGES_PER_READ pages (a few at a
+      // time in parallel), then the results are combined — one request can't
+      // hold a whole house worth of rooms.
+      let pageTotal = 1;
+      const isPdfFile = planFile.type === "application/pdf" || /\.pdf$/i.test(planFile.name);
+      if (isPdfFile) {
+        try {
+          pageTotal = (await PDFDocument.load(await planFile.arrayBuffer())).getPageCount();
+        } catch {
+          pageTotal = 1;
         }
       }
+      const chunks: number[][] = [];
+      if (pageTotal > PAGES_PER_READ) {
+        for (let i = 0; i < pageTotal; i += PAGES_PER_READ) {
+          chunks.push(Array.from({ length: Math.min(PAGES_PER_READ, pageTotal - i) }, (_, k) => i + k));
+        }
+      } else {
+        chunks.push([]);
+      }
 
-      const dim = await extractDimensionStrings(planFile);
-      const dimensionStrings = dim.strings;
-      const res = await fetch("/api/plans/read", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planPath, schedulePath, dimensionStrings, dimNote: dim.note }),
+      async function readChunk(indices: number[]): Promise<{ data?: any; error?: string }> {
+        const chunkFile = indices.length > 0 ? await extractPdfPages(planFile, indices) : planFile;
+        const planPath = storagePathFor(user!.id, chunkFile);
+        const { error: planUploadError } = await supabase.storage
+          .from("plan-uploads")
+          .upload(planPath, chunkFile, { contentType: chunkFile.type });
+        if (planUploadError) return { error: "Could not upload the plan. Please try again." };
+
+        let schedulePath: string | null = null;
+        if (scheduleFile) {
+          schedulePath = storagePathFor(user!.id, scheduleFile);
+          const { error: scheduleUploadError } = await supabase.storage
+            .from("plan-uploads")
+            .upload(schedulePath, scheduleFile, { contentType: scheduleFile.type });
+          if (scheduleUploadError) return { error: "Could not upload the finishes schedule. Please try again." };
+        }
+
+        const dim = await extractDimensionStrings(chunkFile);
+        const res = await fetch("/api/plans/read", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ planPath, schedulePath, dimensionStrings: dim.strings, dimNote: dim.note }),
+        });
+        const rawBody = await res.text();
+        let d: any;
+        try {
+          d = JSON.parse(rawBody);
+        } catch {
+          return {
+            error: `The server stopped before finishing the read (status ${res.status}) — usually a time-out on a large or busy read. ${rawBody.slice(0, 80).replace(/<[^>]*>/g, " ").trim()}`,
+          };
+        }
+        if (!res.ok) return { error: d.error || "Could not read this plan." };
+        // Page numbers in this chunk are relative to the chunk — shift them back to the whole file.
+        const off = indices.length > 0 ? indices[0] : 0;
+        if (off > 0) {
+          (d.items || []).forEach((it: any) => (it.regions || []).forEach((r: any) => { if (typeof r.page === "number") r.page += off; }));
+          (d.walls || []).forEach((w: any) => {
+            if (typeof w.page === "number") w.page += off;
+            if (w.geom && typeof w.geom.page === "number") w.geom.page += off;
+          });
+        }
+        return { data: d };
+      }
+
+      const results: ({ data?: any; error?: string } | undefined)[] = new Array(chunks.length);
+      let nextChunk = 0;
+      let doneChunks = 0;
+      const updateProgress = () => {
+        if (chunks.length > 1) setPlanProgress(`Reading plan… part ${Math.min(doneChunks + 1, chunks.length)} of ${chunks.length}`);
+      };
+      updateProgress();
+      const workers = Array.from({ length: Math.min(3, chunks.length) }, async () => {
+        while (nextChunk < chunks.length) {
+          const ci = nextChunk++;
+          try {
+            results[ci] = await readChunk(chunks[ci]);
+          } catch (e) {
+            results[ci] = { error: e instanceof Error ? e.message : String(e) };
+          }
+          doneChunks++;
+          updateProgress();
+        }
       });
-      const rawBody = await res.text();
-      let data: any;
-      try {
-        data = JSON.parse(rawBody);
-      } catch {
-        // Not JSON: usually the host cutting the request off at its time
-        // limit (the page then holds an error message, not our JSON).
-        setPlanError(
-          `The server stopped before finishing the read (status ${res.status}) — usually a time-out on a large or busy read. Try selecting just the page(s) you need. ${rawBody.slice(0, 80).replace(/<[^>]*>/g, " ").trim()}`
-        );
+      await Promise.all(workers);
+
+      const okResults = results.filter((r) => r?.data).map((r) => r!.data);
+      const failed = results.map((r, i) => (r?.error ? `pages ${chunks[i][0] + 1}–${chunks[i][chunks[i].length - 1] + 1}: ${r.error}` : "")).filter(Boolean);
+      if (okResults.length === 0) {
+        setPlanError(failed[0] || "Could not read this plan.");
         return;
       }
-      if (!res.ok) {
-        setPlanError(data.error || "Could not read this plan.");
-        return;
+      const data: any = { ...okResults[0] };
+      okResults.slice(1).forEach((d) => {
+        Object.keys(d).forEach((k) => {
+          if (Array.isArray(d[k])) data[k] = [...(Array.isArray(data[k]) ? data[k] : []), ...d[k]];
+          else if (data[k] === undefined || data[k] === null || data[k] === "") data[k] = d[k];
+        });
+      });
+      if (failed.length > 0) {
+        data.consistency_warnings = [
+          ...(data.consistency_warnings || []),
+          ...failed.map((f) => `Part of the plan could not be read and is missing from this list — ${f}`),
+        ];
       }
+
       // Fold any duplicate run filed under two different room labels back
       // onto one label (see reconcileRoomLabels), then combine matching
       // base/wall/tall bands from different walls — see mergePlanBands for
@@ -1634,6 +1697,7 @@ export default function QuoteBuilder({
       setPlanError(`The plan could not be read (${detail.slice(0, 160)}). If this keeps happening, tell Claude the exact message.`);
     } finally {
       setPlanUploading(false);
+      setPlanProgress("");
     }
   }
 
@@ -1653,7 +1717,7 @@ export default function QuoteBuilder({
       file,
       pageCount,
       // Big drawing sets: start with nothing selected so the whole house isn't read at once.
-      selectedPages: target === "plan" && pageCount > 8 ? new Set<number>() : allPageIndices(pageCount),
+      selectedPages: allPageIndices(pageCount),
       pagesInput: "",
       thumbnails: new Array(pageCount).fill(""),
       busy: false,
@@ -1747,14 +1811,6 @@ export default function QuoteBuilder({
     if (!pdfPicker) return;
     if (pdfPicker.selectedPages.size === 0) {
       setPdfPicker((prev) => (prev ? { ...prev, error: "Select at least one page." } : prev));
-      return;
-    }
-    if (pdfPicker.target === "plan" && pdfPicker.selectedPages.size > 8) {
-      setPdfPicker((prev) =>
-        prev
-          ? { ...prev, error: `${prev.selectedPages.size} pages is too many to read accurately in one go. Select just the pages for one room or area (up to 8), read it, then repeat for the next room.` }
-          : prev
-      );
       return;
     }
     setPdfPicker((prev) => (prev ? { ...prev, busy: true, error: null } : prev));
@@ -2290,7 +2346,7 @@ export default function QuoteBuilder({
         </h3>
         <div className="flex flex-wrap gap-2 items-center">
           <label className="inline-block border border-line-strong rounded-md px-3 py-2 text-sm cursor-pointer hover:bg-paper">
-            {planUploading ? "Reading plan…" : "Upload a plan (PNG, JPEG or PDF)"}
+            {planUploading ? (planProgress || "Reading plan…") : "Upload a plan (PNG, JPEG or PDF)"}
             <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" className="hidden" onChange={handlePlanUpload} disabled={planUploading} />
           </label>
           <label className="inline-block border border-line rounded-md px-3 py-2 text-xs cursor-pointer hover:bg-paper text-ink-soft">

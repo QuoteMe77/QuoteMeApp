@@ -318,7 +318,7 @@ export async function POST(request: NextRequest) {
     if ((message as { stop_reason?: string }).stop_reason === "max_tokens") {
       return {
         parsed: null,
-        error: "This plan has too much on it to read in one go (the answer ran out of room). Re-upload and select just the pages for one room or area (up to about 8 pages), then repeat for the next room.",
+        error: "This plan has too much on it to read in one go (the answer ran out of room). Try again with fewer pages selected.",
       };
     }
 
