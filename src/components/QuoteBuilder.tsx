@@ -192,6 +192,38 @@ const OVERVIEW_COLORS = [
   "#0891b2", "#db2777", "#65a30d", "#ea580c", "#4b5563",
 ];
 
+// Reads each sheet's title block ("TITLE: BED 2 WARDROBE") from the PDF's own text, so a
+// page can be tied to its room without trusting the AI's page numbers.
+async function extractPageTitles(file: File): Promise<Map<number, string>> {
+  const titles = new Map<number, string>();
+  if (!/pdf/i.test(file.type) && !/\.pdf$/i.test(file.name)) return titles;
+  try {
+    ensurePdfjsWorker();
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1 });
+      const tc = await (page as unknown as { getTextContent(): Promise<{ items: unknown[] }> }).getTextContent();
+      const items = (tc.items as unknown as { str?: string; transform: number[] }[])
+        .map((r) => ({ s: (r.str || "").trim(), x: r.transform[4], y: viewport.height - r.transform[5] }))
+        .filter((r) => r.s);
+      const ti = items.find((r) => /^TITLE:?$/i.test(r.s));
+      if (!ti) continue;
+      const text = items
+        .filter((r) => r.x >= ti.x - 4 && r.x < ti.x + 220 && r.y > ti.y + 2 && r.y < ti.y + 24)
+        .sort((a, b) => a.y - b.y || a.x - b.x)
+        .map((r) => r.s)
+        .join(" ")
+        .replace(/\s+(SCALE|DRAWN BY|DRAWING NO).*$/i, "")
+        .trim();
+      if (text) titles.set(i, text);
+    }
+  } catch {
+    /* no titles — fall back to the AI's own page guesses */
+  }
+  return titles;
+}
+
 // Pulls the printed dimension strings (column widths) out of the PDF's own
 // text layer, exactly and repeatably, so the AI never has to read tiny
 // numbers off a picture. Returns [] for scans/images with no text layer, in
@@ -1390,7 +1422,11 @@ export default function QuoteBuilder({
   // Walls read from the PDF text carry no room name. On a multi-room set, give each wall
   // the room whose items are drawn on that wall's page, so lengths/drawers/PTO land on
   // the right room instead of being dropped.
-  function assignWallRooms(items: PlanItemResult[], walls: { room?: string; page?: number }[] | undefined) {
+  function assignWallRooms(
+    items: PlanItemResult[],
+    walls: { room?: string; page?: number }[] | undefined,
+    pageRoom: Map<number, string>
+  ) {
     if (!Array.isArray(walls)) return;
     const rooms = new Map<string, Map<number, number>>();
     items.forEach((it) => {
@@ -1402,8 +1438,14 @@ export default function QuoteBuilder({
     });
     if (rooms.size <= 1) return;
     walls.forEach((w) => {
-      if (w.room && rooms.has(w.room.trim())) return;
       const pg = w.page || 1;
+      // The sheet's own title block is the most reliable answer.
+      const byTitle = pageRoom.get(pg);
+      if (byTitle) {
+        w.room = byTitle;
+        return;
+      }
+      if (w.room && rooms.has(w.room.trim())) return;
       let best = "";
       let bestScore = 0;
       rooms.forEach((m, room) => {
@@ -1424,6 +1466,50 @@ export default function QuoteBuilder({
         }));
       }
       if (best) w.room = best;
+    });
+  }
+
+  // page -> item room, matched from each sheet's title ("MASTER BED WIR" ↔ room "Master Bed WIR").
+  function roomsByPageTitle(items: PlanItemResult[], titles: Map<number, string>): Map<number, string> {
+    const tok = (t: string) => new Set(t.toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim().split(" ").filter(Boolean));
+    const labels = Array.from(new Set(items.map((it) => it.room.trim()).filter(Boolean)));
+    const out = new Map<number, string>();
+    titles.forEach((title, page) => {
+      const tt = tok(title);
+      let best = "";
+      let bestScore = 0;
+      labels.forEach((l) => {
+        const lt = tok(l);
+        let inter = 0;
+        tt.forEach((x) => lt.has(x) && inter++);
+        const score = inter / (tt.size + lt.size - inter || 1);
+        if (score > bestScore) {
+          best = l;
+          bestScore = score;
+        }
+      });
+      if (best && bestScore >= 0.5) out.set(page, best);
+    });
+    return out;
+  }
+
+  // Keep an item's boxes only on sheets titled for its own room; if none are left, point at its own sheets.
+  function filterRegionsByRoom(items: PlanItemResult[], pageRoom: Map<number, string>): PlanItemResult[] {
+    if (pageRoom.size === 0) return items;
+    return items.map((it) => {
+      const room = it.room.trim();
+      if (!room || !it.regions || it.regions.length === 0) return it;
+      const kept = it.regions.filter((r) => {
+        const pr = pageRoom.get(r.page);
+        return !pr || pr === room;
+      });
+      if (kept.length === it.regions.length) return it;
+      if (kept.length > 0) return { ...it, regions: kept };
+      const own = Array.from(pageRoom.entries()).filter(([, r]) => r === room).map(([p]) => p).slice(0, 3);
+      return {
+        ...it,
+        regions: own.map((page) => ({ page, bbox: [0.03, 0.05, 0.97, 0.88] as [number, number, number, number] })),
+      };
     });
   }
 
@@ -1684,7 +1770,10 @@ export default function QuoteBuilder({
       if (Array.isArray(data.items)) {
         const reconciled = reconcileRoomLabels(data.items as PlanItemResult[]);
         roomLabels = reconciled.roomLabels;
-        assignWallRooms(reconciled.items, data.walls);
+        const pageTitles = await extractPageTitles(planFile);
+        const pageRoom = roomsByPageTitle(reconciled.items, pageTitles);
+        assignWallRooms(reconciled.items, data.walls, pageRoom);
+        reconciled.items = filterRegionsByRoom(reconciled.items, pageRoom);
         const merged = splitDrawersOut(applyTextCounts(mergePlanBands(reconciled.items), data.walls));
         const inv = applyColumnInventory(merged, data.walls);
         data.items = anchorRegions(flagMatchingBandLengths(inv.items), inv.report);
