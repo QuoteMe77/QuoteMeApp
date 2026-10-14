@@ -185,12 +185,14 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     doc.text(idx, mx + 4, y + 13);
     setFont("helvetica", "normal", 10, ink);
     doc.text(label, mx + 40, y + 13, { maxWidth: cw - 170 });
-    if (hasPoa) {
-      setFont("helvetica", "bold", 7, brass);
-      doc.text("+ POA", W - mx - 4, y + 13, { align: "right" });
-    }
+    // The price always sits on the right edge so every figure lines up; "+ POA" goes to its left.
     setFont("helvetica", "normal", 10, ink);
-    doc.text(price, W - mx - 4 - (hasPoa ? 34 : 0), y + 13, { align: "right" });
+    doc.text(price, W - mx - 4, y + 13, { align: "right" });
+    if (hasPoa) {
+      const pw = doc.getTextWidth(price);
+      setFont("helvetica", "bold", 7, brass);
+      doc.text("+ POA", W - mx - 4 - pw - 8, y + 13, { align: "right" });
+    }
     y += 19;
   };
   sumRow("—", "Standard Inclusions", "", false, false);
@@ -239,12 +241,13 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     setFont("times", "bold", 12, ink);
     doc.text(title, mx + 34, y + 16, { maxWidth: cw - 160 });
     if (price) {
-      if (hasPoa) {
-        setFont("helvetica", "bold", 7, brass);
-        doc.text("+ POA", W - mx - 8, y + 16, { align: "right" });
-      }
       setFont("helvetica", "bold", 10.5, ink);
-      doc.text(price, W - mx - 8 - (hasPoa ? 34 : 0), y + 16, { align: "right" });
+      doc.text(price, W - mx - 8, y + 16, { align: "right" });
+      if (hasPoa) {
+        const pw = doc.getTextWidth(price);
+        setFont("helvetica", "bold", 7, brass);
+        doc.text("+ POA", W - mx - 8 - pw - 8, y + 16, { align: "right" });
+      }
     } else {
       setFont("helvetica", "bold", 7.5, brass);
       doc.text("INCLUDED", W - mx - 8, y + 16, { align: "right" });
