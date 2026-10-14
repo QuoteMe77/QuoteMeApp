@@ -266,17 +266,34 @@ async function extractPageTitles(file: File): Promise<Map<number, string>> {
       const viewport = page.getViewport({ scale: 1 });
       const tc = await (page as unknown as { getTextContent(): Promise<{ items: unknown[] }> }).getTextContent();
       const items = (tc.items as unknown as { str?: string; transform: number[] }[])
-        .map((r) => ({ s: (r.str || "").trim(), x: r.transform[4], y: viewport.height - r.transform[5] }))
+        .map((r) => ({ s: (r.str || "").trim(), x: r.transform[4], y: viewport.height - r.transform[5], size: Math.abs(r.transform[3]) }))
         .filter((r) => r.s);
-      const ti = items.find((r) => /^TITLE:?$/i.test(r.s));
-      if (!ti) continue;
-      const text = items
-        .filter((r) => r.x >= ti.x - 4 && r.x < ti.x + 220 && r.y > ti.y + 2 && r.y < ti.y + 24)
-        .sort((a, b) => a.y - b.y || a.x - b.x)
-        .map((r) => r.s)
-        .join(" ")
-        .replace(/\s+(SCALE|DRAWN BY|DRAWING NO).*$/i, "")
-        .trim();
+      const ti = items.find((r) => /^TITLE:?/i.test(r.s));
+      let text = "";
+      if (ti) {
+        const inline = ti.s.replace(/^TITLE:?\s*/i, "");
+        text = (inline
+          ? inline
+          : items
+              .filter((r) => r.x >= ti.x - 4 && r.x < ti.x + 220 && r.y > ti.y + 2 && r.y < ti.y + 24)
+              .sort((a, b) => a.y - b.y || a.x - b.x)
+              .map((r) => r.s)
+              .join(" ")
+        )
+          .replace(/\s+(SCALE|DRAWN BY|DRAWING NO).*$/i, "")
+          .trim();
+      }
+      if (!text) {
+        // Fallback: the sheet's title is the largest lettering in the bottom-right title block.
+        const block = items.filter((r) => r.x > viewport.width * 0.78 && r.y > viewport.height * 0.85 && r.size > 0);
+        const top = block.reduce((m, r) => Math.max(m, r.size), 0);
+        text = block
+          .filter((r) => r.size >= top - 0.2 && !/^(FOR APPROVAL|NORTH:?|TITLE:?)$/i.test(r.s))
+          .sort((a, b) => a.y - b.y || a.x - b.x)
+          .map((r) => r.s)
+          .join(" ")
+          .trim();
+      }
       if (text) titles.set(i, text);
     }
   } catch {
@@ -1649,14 +1666,15 @@ export default function QuoteBuilder({
     if (marks.size === 0) return items;
     const out: PlanItemResult[] = [];
     const done = new Set<string>();
-    for (const it of items) {
+    for (let it of items) {
       if (!/^curved end/i.test(it.name)) {
         out.push(it);
         continue;
       }
-      // Curved base / wall ends are part of the run's lineal metres (the curved column's width is
-      // included in the length), so they get no separate line. Only a TALL curved void box does.
-      if (/^curved end\s*-\s*(base|wall)/i.test(it.name)) continue;
+      // The curved column's width is also part of the run's lineal metres; the curve itself is its
+      // own counted line (tall: priced from the book; base / wall: named so it can be priced).
+      const baseWall = /^curved end\s*-\s*(base|wall)/i.exec(it.name);
+      if (baseWall && !/void box/i.test(it.name)) it = { ...it, name: `Curved end - ${baseWall[1].toLowerCase()} curved void box` };
       const room = it.room.trim();
       const key = room.toLowerCase();
       const boxes: { page: number; bbox: [number, number, number, number] }[] = [];
@@ -1680,6 +1698,44 @@ export default function QuoteBuilder({
       done.add(key);
       out.push({ ...it, qty: boxes.length, regions: boxes, note: [it.note, `${boxes.length} curved end(s) — counted from the radius callouts on the drawing`].filter(Boolean).join("; ") });
     }
+    // Rooms with radius callouts on their own sheets but no curved line from the AI: add one.
+    const byRoom = new Map<string, { n: number; boxes: { page: number; bbox: [number, number, number, number] }[] }>();
+    marks.forEach((list, page) => {
+      const room = pageRoom.get(page);
+      if (!room) return;
+      const e = byRoom.get(room) || { n: 0, boxes: [] };
+      list.forEach((m) => {
+        const c = (n: number) => Math.min(1, Math.max(0, n));
+        e.n++;
+        e.boxes.push({ page, bbox: [c(m.x - 0.075), c(m.y - 0.105), c(m.x + 0.095), c(m.y + 0.02)] });
+      });
+      byRoom.set(room, e);
+    });
+    byRoom.forEach((e, room) => {
+      const key = room.toLowerCase();
+      if (done.has(key)) return;
+      const inRoom = out.filter((it) => it.room.trim().toLowerCase() === key);
+      if (inRoom.length === 0 || inRoom.some((it) => /^curved end/i.test(it.name))) return;
+      const tall = inRoom.some((it) => it.cabinet_type === "tall");
+      const template = inRoom.find((it) => it.calc === "LM") || inRoom[0];
+      out.push({
+        ...template,
+        name: tall ? "Curved end - tall curved void box" : "Curved end - base curved void box",
+        cabinet_type: "other",
+        calc: "QTY",
+        qty: e.n,
+        unit: "ea",
+        material_hint: "",
+        drawer_count: 0,
+        pto_drawer_count: 0,
+        drawer_brand: "",
+        open: false,
+        note: `${e.n} curved end(s) — counted from the radius callouts (R300) on the drawing`,
+        confidence: "high",
+        duplicate_wall_warning: undefined,
+        regions: e.boxes,
+      });
+    });
     return out;
   }
 
@@ -1999,6 +2055,9 @@ export default function QuoteBuilder({
         const reconciled = reconcileRoomLabels(data.items as PlanItemResult[]);
         roomLabels = reconciled.roomLabels;
         const pageTitles = await extractPageTitles(planFile);
+        if (pageTitles.size === 0 && pageTotal > 1) {
+          data.consistency_warnings = [...(data.consistency_warnings || []), "Could not read the sheet titles from this PDF, so rooms were matched from the AI's own page guesses — check each room's lengths and drawers."];
+        }
         const pageRoom = roomsByPageTitle(reconciled.items, pageTitles);
         assignWallRooms(reconciled.items, data.walls, pageRoom, pageTitles);
         reconciled.items = filterRegionsByRoom(reconciled.items, pageRoom);
