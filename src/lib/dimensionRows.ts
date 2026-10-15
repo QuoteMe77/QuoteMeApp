@@ -29,6 +29,9 @@ export type DimColumn = {
 export type DimensionString = {
   page: number;
   overall: number;
+  rowY?: number; // y (page units, from top) of the printed segment row
+  rowX0?: number; // left / right edge of that row, page units
+  rowX1?: number;
   columns: DimColumn[];
   // Vertical extent of the elevation as fractions of the page height, with the
   // real-world height (mm) it represents — from the tall vertical dimension.
@@ -48,7 +51,7 @@ export function normaliseFigure(str: string) {
   return /^\d{1,2},\d{3}(\.\d+)?$/.test(t) ? t.replace(",", "") : t;
 }
 
-export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: number, pageH = 0): DimensionString[] {
+export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: number, pageH = 0, tol = 1): DimensionString[] {
   const nums = words
     .filter((t) => !t.rotated && NUM.test(t.str.trim()))
     .map((t) => ({ v: parseFloat(t.str), xc: t.x + t.w / 2, y: t.y, x: t.x, w: t.w }));
@@ -78,23 +81,25 @@ export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: n
       // under/over the overall figure (a stray figure from a neighbouring
       // elevation on the same row can otherwise slide a run sideways).
       let hit: typeof nums | null = null;
+      let hitSum = 0;
       let bestDist = Infinity;
       for (let i = 0; i < row.length; i++) {
         let sum = 0;
         for (let j = i; j < row.length; j++) {
           sum += row[j].v;
-          if (j - i >= 2 && Math.abs(sum - o.v) <= 1) {
+          if (j - i >= 2 && Math.abs(sum - o.v) <= tol) {
             const run = row.slice(i, j + 1);
             const left = run[0].x, right = run[run.length - 1].x + run[run.length - 1].w;
             if (o.xc >= left - 20 && o.xc <= right + 20) {
-              const d = Math.abs((left + right) / 2 - o.xc);
+              const d = Math.abs((left + right) / 2 - o.xc) + Math.abs(sum - o.v) * 40;
               if (d < bestDist) {
                 bestDist = d;
                 hit = run;
+                hitSum = sum;
               }
             }
           }
-          if (sum > o.v + 1) break;
+          if (sum > o.v + tol) break;
         }
       }
       if (hit) {
@@ -154,7 +159,9 @@ export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: n
         // one with a tall vertical (height) dimension beside it, so that's required
         // for the "row below the overall" style.
         if (dir === -1 && !frame) break;
-        out.push({ page: pageNo, overall: o.v, columns, frame });
+        // A loose match (Archicad sheets whose printed segments fall a few mm short of the overall)
+        // takes the segments' own sum as the overall so the columns still check out.
+        out.push({ page: pageNo, overall: Math.abs(hitSum - o.v) > 1 ? hitSum : o.v, columns, frame, rowY, rowX0: first.x, rowX1: last.x + last.w });
         break;
       }
     }

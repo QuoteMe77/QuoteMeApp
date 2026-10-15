@@ -9,7 +9,7 @@ import { downloadQuoteDocx } from "@/lib/exportDocx";
 import { PDFDocument } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist";
 import { normaliseFigure, findDimensionStrings } from "@/lib/dimensionRows";
-import { analyseElevations, findDrawerView } from "@/lib/elevationBands";
+import { analyseElevations, dropNonFrontViews, findDrawerView } from "@/lib/elevationBands";
 import type { DrawerView } from "@/lib/elevationBands";
 import type { DimensionString, TextWord } from "@/lib/dimensionRows";
 
@@ -356,7 +356,8 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
         const n = /^\d+(\.\d+)?$/.test(w.str) ? parseFloat(w.str) : 0;
         if (n >= 300 && bigNums.length < 8) bigNums.push(n);
       }
-      const found = findDimensionStrings(words, i, viewport.width, viewport.height);
+      let found = findDimensionStrings(words, i, viewport.width, viewport.height, sawComma ? 12 : 1);
+      if (sawComma) found = dropNonFrontViews(words, found);
       if (sawComma) {
         found.forEach((d) => (d.keepEnds = true));
         // Archicad-style sheets print a height chain and labels that say exactly what each
@@ -1229,6 +1230,29 @@ export default function QuoteBuilder({
   // as the full wall width). A checksum — column widths must add up to the
   // elevation's printed overall dimension — catches misread columns; a wall
   // that fails it is NOT used to override anything and is flagged instead.
+  // A sheet whose title matches none of the AI's rooms (so no item of that room exists yet) still
+  // gets its measured lengths: a blank line is built from any other item and given the sheet's room.
+  function blankRoomItem(items: PlanItemResult[], display: string): PlanItemResult | undefined {
+    const any = items[0];
+    if (!any) return undefined;
+    const room = display.replace(/^\(sheet\)\s*/i, "").toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+    return {
+      ...any,
+      room,
+      calc: "LM" as const,
+      cabinet_type: "base",
+      qty: 0,
+      unit: "lm",
+      open: false,
+      drawer_count: 0,
+      pto_drawer_count: 0,
+      material_hint: "",
+      regions: [],
+      note: "",
+      duplicate_wall_warning: undefined,
+    };
+  }
+
   function applyColumnInventory(
     items: PlanItemResult[],
     walls:
@@ -1242,7 +1266,7 @@ export default function QuoteBuilder({
     const lmItems = items.filter((it) => it.calc === "LM" && ["base", "wall", "tall"].includes(it.cabinet_type));
     const itemRooms = Array.from(new Set(lmItems.map((it) => it.room.trim().toLowerCase())));
 
-    const totals = new Map<string, { base: number; wall: number; tall: number; parts: { base: string[]; wall: string[]; tall: string[] }; room: string; det: boolean; allDet: boolean }>();
+    const totals = new Map<string, { base: number; wall: number; tall: number; parts: { base: string[]; wall: string[]; tall: string[] }; room: string; display: string; det: boolean; allDet: boolean }>();
     for (const w of walls) {
       const cols = (Array.isArray(w.columns) ? w.columns : []).map((c) => ({
         width_mm: Number(c.width_mm) || 0,
@@ -1289,7 +1313,7 @@ export default function QuoteBuilder({
       if (!itemRooms.includes(roomKey)) roomKey = itemRooms.length === 1 ? itemRooms[0] : roomKey;
       const t =
         totals.get(roomKey) ||
-        { base: 0, wall: 0, tall: 0, parts: { base: [], wall: [], tall: [] }, room: roomKey, det: false, allDet: true };
+        { base: 0, wall: 0, tall: 0, parts: { base: [], wall: [], tall: [] }, room: roomKey, display: (w.room || roomKey).trim(), det: false, allDet: true };
       if (w.geom?.det) t.det = true;
       else t.allDet = false;
       t.base += rep.base;
@@ -1329,7 +1353,8 @@ export default function QuoteBuilder({
             out.find((it) => it.calc === "LM" && it.room.trim().toLowerCase() === roomKey && it.cabinet_type === "base") ||
             out.find((it) => it.calc === "LM" && it.room.trim().toLowerCase() === roomKey) ||
             out.find((it) => it.room.trim().toLowerCase() === roomKey && !/stone|by others/i.test(it.name)) ||
-            out.find((it) => it.room.trim().toLowerCase() === roomKey);
+            out.find((it) => it.room.trim().toLowerCase() === roomKey) ||
+            blankRoomItem(out, t.display);
           if (template) {
             if (type === "base") createdBase.add(roomKey);
             out.push({
@@ -1626,13 +1651,20 @@ export default function QuoteBuilder({
         const lt = tok(l);
         let inter = 0;
         tt.forEach((x) => lt.has(x) && inter++);
-        const score = inter / (tt.size + lt.size - inter || 1);
+        let score = inter / (tt.size + lt.size - inter || 1);
+        // "MASTER BED WIR" vs "MASTER BED VANITY" share half their words but are different rooms:
+        // a half match only counts when one name is wholly contained in the other.
+        if (score <= 0.5 && inter < Math.min(tt.size, lt.size)) score = 0;
         if (score > bestScore) {
           best = l;
           bestScore = score;
         }
       });
       if (best && bestScore >= 0.5) out.set(page, best);
+      // A sheet titled for a room none of the AI's items carry still gets its own room, so its
+      // measured lengths and drawers are kept (and not poured into a neighbouring room).
+      else if (labels.length > 1 && /[A-Z]{3}/i.test(title) && !/\b(PLAN|COVER|INDEX|SCHEDULE|NOTES)\b/i.test(title))
+        out.set(page, title.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()));
     });
     return out;
   }
@@ -1773,7 +1805,7 @@ export default function QuoteBuilder({
       out = out.filter((it) => !existing.includes(it));
       // A vanity the AI listed as one unit carries its own drawer count — cleared so nothing is priced twice.
       out = out.map((it) => (inRoom(it) && it.drawer_count > 0 ? { ...it, drawer_count: 0, pto_drawer_count: 0 } : it));
-      const template = out.find((it) => inRoom(it) && it.calc === "LM") || out.find((it) => inRoom(it));
+      const template = out.find((it) => inRoom(it) && it.calc === "LM") || out.find((it) => inRoom(it)) || blankRoomItem(out, room);
       if (!template) return;
       out.push({
         ...template,

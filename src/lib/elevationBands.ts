@@ -268,3 +268,19 @@ export function findDrawerView(words: TextWord[], pageNo: number, pageW: number,
   }
   return best;
 }
+
+// Archicad sheets title every view ("E01: FRONT ELEVATION", "E02: SIDE ELEVATION", "SECTION"...) just
+// below it. A dimension string whose nearest title below is a side elevation, section or plan is a
+// different view of the same joinery, not another run of cabinets — it is dropped.
+export function dropNonFrontViews(words: TextWord[], strings: DimensionString[]): DimensionString[] {
+  const titles = words.filter((w) => /^[A-Z]\d{1,2}:\s*\S/.test(w.str.trim()) && !w.rotated);
+  if (titles.length === 0) return strings;
+  return strings.filter((d) => {
+    if (typeof d.rowY !== "number" || typeof d.rowX0 !== "number" || typeof d.rowX1 !== "number") return true;
+    const below = titles
+      .filter((t) => t.y > d.rowY! && t.x <= d.rowX1! + 30 && t.x + t.w >= d.rowX0! - 30)
+      .sort((a, b) => a.y - b.y)[0];
+    if (!below) return true;
+    return !/\b(SIDE\s+ELEVATION|SECTION|PLAN)\b/i.test(below.str) || /\bELEVATIONS?\b/i.test(below.str) && !/SIDE|SECTION/i.test(below.str);
+  });
+}
