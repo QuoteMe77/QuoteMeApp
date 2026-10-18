@@ -751,6 +751,9 @@ export default function QuoteBuilder({
     if (/curved end.*tall|tall.*curved/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("curve - tall curved void box")) || null;
     }
+    if (/curved end.*base|base.*curved/.test(name)) {
+      return priceBook.find((p) => p.name.toLowerCase().includes("curve - island bench 900mm high x 450mm wide")) || null;
+    }
     if (/^drawers\b/.test(name)) {
       return findDrawerHardware(it.drawer_brand || "", /push.to.open|\bpto\b/.test(name));
     }
