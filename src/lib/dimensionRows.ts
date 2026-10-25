@@ -39,6 +39,7 @@ export type DimensionString = {
   // Sheet style (Archicad etc.) where the small end figures are end panels that
   // belong to the cabinetry, so they count toward its length.
   keepEnds?: boolean;
+  led?: boolean; // the sheet carries LED notes
   // Bands (tall / base / wall height ranges) worked out from the printed height chain.
   det?: { floor: number; k: number; bands: { kind: "base" | "wall" | "tall"; lo: number; hi: number }[]; printed?: { wall?: number } };
 };

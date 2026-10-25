@@ -358,6 +358,7 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
       }
       let found = findDimensionStrings(words, i, viewport.width, viewport.height, sawComma ? 12 : 1);
       if (sawComma) found = dropNonFrontViews(words, found);
+      if (words.some((w) => /\bLED\d*\b/i.test(w.str))) found.forEach((d) => (d.led = true));
       if (sawComma) {
         found.forEach((d) => (d.keepEnds = true));
         // Archicad-style sheets print a height chain and labels that say exactly what each
@@ -465,6 +466,7 @@ type ColumnGeom = {
   cols: { x0: number; x1: number }[];
   // Bands read from the drawing's own height chain (see lib/elevationBands.ts).
   det?: { floor: number; k: number; bands: { kind: "base" | "wall" | "tall"; lo: number; hi: number }[]; printed?: { wall?: number } };
+  led?: boolean;
 };
 type ColumnReport = {
   geom?: ColumnGeom;
@@ -1269,7 +1271,7 @@ export default function QuoteBuilder({
     const lmItems = items.filter((it) => it.calc === "LM" && ["base", "wall", "tall"].includes(it.cabinet_type));
     const itemRooms = Array.from(new Set(lmItems.map((it) => it.room.trim().toLowerCase())));
 
-    const totals = new Map<string, { base: number; wall: number; tall: number; parts: { base: string[]; wall: string[]; tall: string[] }; room: string; display: string; det: boolean; allDet: boolean }>();
+    const totals = new Map<string, { base: number; wall: number; tall: number; parts: { base: string[]; wall: string[]; tall: string[] }; room: string; display: string; det: boolean; allDet: boolean; ledMm: number; ledPages: number[] }>();
     for (const w of walls) {
       const cols = (Array.isArray(w.columns) ? w.columns : []).map((c) => ({
         width_mm: Number(c.width_mm) || 0,
@@ -1316,7 +1318,11 @@ export default function QuoteBuilder({
       if (!itemRooms.includes(roomKey)) roomKey = itemRooms.length === 1 ? itemRooms[0] : roomKey;
       const t =
         totals.get(roomKey) ||
-        { base: 0, wall: 0, tall: 0, parts: { base: [], wall: [], tall: [] }, room: roomKey, display: (w.room || roomKey).trim(), det: false, allDet: true };
+        { base: 0, wall: 0, tall: 0, parts: { base: [], wall: [], tall: [] }, room: roomKey, display: (w.room || roomKey).trim(), det: false, allDet: true, ledMm: 0, ledPages: [] };
+      if (w.geom?.led) {
+        t.ledMm += overall;
+        t.ledPages.push(Number(w.page) || 0);
+      }
       if (w.geom?.det) t.det = true;
       else t.allDet = false;
       t.base += rep.base;
@@ -1391,6 +1397,32 @@ export default function QuoteBuilder({
           }
         }
       }
+    }
+    // LED noted on a sheet: the aluminium channel is priced too. Its length isn't printed, so it is
+    // taken as the run's overall width on each sheet that carries an LED note — flagged to check.
+    for (const [roomKey, t] of totals) {
+      if (t.ledMm <= 0) continue;
+      if (out.some((it) => it.room.trim().toLowerCase() === roomKey && /\bled\b/i.test(it.name))) continue;
+      const template = out.find((it) => it.room.trim().toLowerCase() === roomKey) || blankRoomItem(out, t.display);
+      if (!template) continue;
+      const metres = Math.round(t.ledMm) / 1000;
+      out.push({
+        ...template,
+        name: "LED channel",
+        cabinet_type: "other",
+        calc: "LM" as const,
+        qty: metres,
+        unit: "lm",
+        material_hint: "",
+        open: false,
+        drawer_count: 0,
+        pto_drawer_count: 0,
+        drawer_brand: "",
+        note: `LED noted on the drawing (sheet ${Array.from(new Set(t.ledPages)).join(", ")}) — length assumed to be the full width of each elevation showing LED; check it`,
+        confidence: "low",
+        duplicate_wall_warning: undefined,
+        regions: [],
+      });
     }
     if (dropItems.size > 0) out = out.filter((it) => !dropItems.has(it));
     // A vanity the AI listed as ONE unit is replaced by the measured base / wall lengths

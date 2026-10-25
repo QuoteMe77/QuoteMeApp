@@ -173,7 +173,7 @@ export async function POST(request: NextRequest) {
   const schedulePath: unknown = body?.schedulePath;
   // Exact column widths read from the PDF's own text layer by the browser
   // (see lib/dimensionRows.ts). Empty for scans/images.
-  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string; upper?: number; detKind?: string }[]; frame?: { top: number; bottom: number; mm: number }; keepEnds?: boolean; det?: { floor: number; k: number; bands: { kind: "base" | "wall" | "tall"; lo: number; hi: number }[]; printed?: { wall?: number } } };
+  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string; upper?: number; detKind?: string }[]; frame?: { top: number; bottom: number; mm: number }; keepEnds?: boolean; led?: boolean; det?: { floor: number; k: number; bands: { kind: "base" | "wall" | "tall"; lo: number; hi: number }[]; printed?: { wall?: number } } };
   const dimStrings: DimStr[] = Array.isArray(body?.dimensionStrings)
     ? (body.dimensionStrings as DimStr[]).filter(
         (d) =>
@@ -258,7 +258,7 @@ export async function POST(request: NextRequest) {
     job_address?: string;
     items: PlanItem[];
     flags: string[];
-    walls?: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number>; geom?: { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[]; det?: DimStr["det"] } }[];
+    walls?: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number>; geom?: { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[]; det?: DimStr["det"]; led?: boolean } }[];
   };
 
   // A single vision read of a complex multi-page plan isn't deterministic —
@@ -557,7 +557,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
   }
 
   function consensusFixed(reads: FlagCol[][][]): {
-    walls: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number>; geom?: { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[]; det?: DimStr["det"] } }[];
+    walls: { room: string; name: string; page: number; overall_mm: number; columns: { width_mm: number; kind: string; label: string }[]; drawer_tags?: number; drawer_detail?: string; pto?: Record<string, number>; geom?: { page: number; frame?: { top: number; bottom: number; mm: number }; cols: { x0: number; x1: number }[]; det?: DimStr["det"]; led?: boolean } }[];
     warnings: string[];
   } {
     const warnings: string[] = [];
@@ -684,6 +684,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
               : undefined,
           cols: first.columns.map((c) => ({ x0: c.x0, x1: c.x1 })),
           det: first.det,
+          led: first.led || undefined,
         },
       };
     });

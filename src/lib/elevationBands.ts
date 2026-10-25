@@ -133,11 +133,15 @@ export function analyseElevations(words: TextWord[], strings: DimensionString[],
     // --- which segments hold cabinets, merged into bands ---------------------------------
     type Seg = (typeof segs)[number] & { cab: boolean; big: boolean };
     const classified: Seg[] = segs.map((g) => ({ ...g, big: g.v >= 150, cab: g.v >= 150 && evidenceIn(g.lo, g.hi).pos > 0 }));
+    const overheadNoted = textToks.some((t) => /\bOVERHEAD\b/i.test(t.s)); // the drawing itself says "OVERHEAD CUPBOARDS"
     const ranges: { lo: number; hi: number }[] = [];
     for (const g of classified) {
       if (!g.cab) continue;
       const last = ranges[ranges.length - 1];
-      if (last && g.lo - last.hi <= 150) last.hi = g.hi;
+      // Overhead doors sitting above full-height cabinetry, split from it by a thin (<=30mm) strip,
+      // are their own (wall) band rather than part of the tall run.
+      const overhead = overheadNoted && last && last.hi >= 1800 && g.lo - last.hi > 0 && g.lo - last.hi <= 30 && g.v >= 300 && g.lo >= 1800;
+      if (last && !overhead && g.lo - last.hi <= 150) last.hi = g.hi;
       else ranges.push({ lo: g.lo, hi: g.hi });
     }
     if (ranges.length === 0) continue;
@@ -226,7 +230,7 @@ export function analyseElevations(words: TextWord[], strings: DimensionString[],
     }
     cols.forEach((c, i) => {
       const k = kinds[i];
-      c.detKind = c.width < 60 ? "gap" : k.tall ? "tall" : k.base && k.wall ? "base_wall" : k.base ? "base" : k.wall ? "wall" : "gap";
+      c.detKind = c.width < 60 ? "gap" : k.tall && k.wall ? "tall_wall" : k.tall ? "tall" : k.base && k.wall ? "base_wall" : k.base ? "base" : k.wall ? "wall" : "gap";
     });
     str.det = { floor: floorY / pageH, k: s / pageH, bands, printed: printedWall ? { wall: printedWall } : undefined };
   }
