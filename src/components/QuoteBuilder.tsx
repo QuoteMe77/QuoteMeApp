@@ -783,7 +783,7 @@ export default function QuoteBuilder({
 
   const MATERIAL_STOPWORDS = new Set([
     "mm", "with", "and", "the", "including", "collection", "series", "range", "doors", "door", "panel",
-    "from", "white", "cabinet", "base", "wall", "tall", "open",
+    "from", "white", "cabinet", "base", "wall", "tall", "open", "internal", "carcass", "stlyex", "stylex",
   ]);
 
   function materialKeywords(s: string): string[] {
