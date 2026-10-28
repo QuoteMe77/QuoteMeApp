@@ -187,6 +187,34 @@ export async function POST(request: NextRequest) {
 
   // Usage metering: one row per chunk, grouped by the browser's read id (one upload = one plan read).
   // Failure to record (e.g. the plan_reads table not created yet) never blocks a read.
+  // Monthly allowance (organizations.monthly_read_limit; empty = unlimited). A read already under way
+  // (same readId) always finishes; only a NEW read over the allowance is refused.
+  try {
+    const limitRes = await supabase.from("organizations").select("monthly_read_limit").eq("id", profile.org_id).single();
+    const limit = (limitRes.data as { monthly_read_limit?: number | null } | null)?.monthly_read_limit;
+    const rid = typeof body?.readId === "string" ? body.readId.slice(0, 64) : "";
+    if (typeof limit === "number" && limit >= 0 && rid) {
+      const monthStart = new Date();
+      monthStart.setUTCDate(1);
+      monthStart.setUTCHours(0, 0, 0, 0);
+      const { data: used } = await supabase
+        .from("plan_reads")
+        .select("read_id")
+        .eq("org_id", profile.org_id)
+        .gte("created_at", monthStart.toISOString())
+        .limit(5000);
+      const ids = new Set((used || []).map((r: { read_id: string }) => r.read_id));
+      if (!ids.has(rid) && ids.size >= limit) {
+        return NextResponse.json(
+          { error: `You've used all ${limit} plan reads included this month. Contact us to add more reads, or wait for the allowance to reset on the 1st.` },
+          { status: 429 }
+        );
+      }
+    }
+  } catch {
+    /* never block a read because the allowance could not be checked */
+  }
+
   try {
     const readId = typeof body?.readId === "string" ? body.readId.slice(0, 64) : "";
     if (readId) {

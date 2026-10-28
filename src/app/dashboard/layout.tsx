@@ -51,6 +51,15 @@ export default async function DashboardLayout({ children }: { children: React.Re
     readsThisMonth = null;
   }
 
+  let readLimit: number | null = null;
+  try {
+    const { data: lim } = await supabase.from("organizations").select("monthly_read_limit").eq("id", profile.org_id).single();
+    const v = (lim as { monthly_read_limit?: number | null } | null)?.monthly_read_limit;
+    readLimit = typeof v === "number" ? v : null;
+  } catch {
+    readLimit = null;
+  }
+
   const trialExpired =
     org?.subscription_status === "trialing" &&
     org?.trial_ends_at &&
@@ -67,7 +76,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <span className="text-ink-soft text-sm flex-1">{org?.name}</span>
         {readsThisMonth !== null && (
           <span className="text-xs text-ink-soft" title="Plans read this month">
-            Plan reads this month: <b className="text-ink">{readsThisMonth}</b>
+            Plan reads this month:{" "}
+            <b className={readLimit !== null && readsThisMonth >= readLimit * 0.8 ? "text-brick" : "text-ink"}>
+              {readsThisMonth}
+              {readLimit !== null ? ` / ${readLimit}` : ""}
+            </b>
           </span>
         )}
         {org?.subscription_status === "trialing" && !trialExpired && (
