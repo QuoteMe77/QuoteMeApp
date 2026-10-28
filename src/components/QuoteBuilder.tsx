@@ -583,6 +583,9 @@ export default function QuoteBuilder({
   const [clientName, setClientName] = useState(quote?.client_name || "");
   const [jobAddress, setJobAddress] = useState(quote?.job_address || "");
   const [quoteRef, setQuoteRef] = useState(quote?.quote_ref || "");
+  const [quoteName, setQuoteName] = useState<string>((quote as { quote_name?: string } | undefined)?.quote_name || "");
+  const [namingOpen, setNamingOpen] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
   const [quoteDate, setQuoteDate] = useState(
     quote?.quote_date || new Date().toISOString().slice(0, 10)
   );
@@ -2634,11 +2637,22 @@ export default function QuoteBuilder({
     setLineItems((prev) => prev.filter((it) => it.key !== key));
   }
 
-  function handleSave() {
+  // First save asks for a name; later saves just save.
+  function requestSave() {
+    if (!quoteName.trim()) {
+      setNameDraft([clientName, jobAddress].map((x) => x.trim()).filter(Boolean).join(" – "));
+      setNamingOpen(true);
+      return;
+    }
+    handleSave();
+  }
+
+  function handleSave(nameOverride?: string) {
     setSaveError(null);
     setSavedNotice(false);
 
     const meta: QuoteMetaInput = {
+      quote_name: (nameOverride ?? quoteName).trim(),
       business_name: businessName,
       business_contact: businessContact,
       builder_name: builderName,
@@ -2854,7 +2868,14 @@ export default function QuoteBuilder({
           {quote ? "Edit quote" : "New quote"}
         </h2>
         <div className="flex items-center gap-3">
-          {savedNotice && <span className="text-xs text-spruce">Saved</span>}
+          {savedNotice && (
+            <span className="text-xs text-spruce">
+              ✓ Saved —{" "}
+              <a href="/dashboard" className="underline font-medium">
+                View my quotes
+              </a>
+            </span>
+          )}
           {saveError && <span className="text-xs text-brick">{saveError}</span>}
           <button
             onClick={handleStartNew}
@@ -2887,7 +2908,7 @@ export default function QuoteBuilder({
             </button>
           )}
           <button
-            onClick={handleSave}
+            onClick={requestSave}
             disabled={isPending}
             className="bg-brass hover:bg-brass-deep text-white rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50"
           >
@@ -2907,6 +2928,9 @@ export default function QuoteBuilder({
           </Field>
           <Field label="Job address">
             <input className="input" value={jobAddress} onChange={(e) => setJobAddress(e.target.value)} />
+          </Field>
+          <Field label="Quote name (how it appears in My quotes)">
+            <input className="input" value={quoteName} onChange={(e) => setQuoteName(e.target.value)} placeholder="e.g. Smith – 12 Oak St kitchen" />
           </Field>
           <Field label="Quote ref">
             <input className="input" value={quoteRef} onChange={(e) => setQuoteRef(e.target.value)} />
@@ -3687,6 +3711,45 @@ export default function QuoteBuilder({
         </div>
       </section>
 
+      {namingOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-lg border border-line-strong bg-paper-raised p-6 shadow-lg">
+            <h3 className="font-display text-lg font-semibold mb-1">Name this quote</h3>
+            <p className="text-sm text-ink-soft mb-3">This is how it will appear in My quotes.</p>
+            <input
+              autoFocus
+              className="input"
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && nameDraft.trim()) {
+                  setQuoteName(nameDraft.trim());
+                  setNamingOpen(false);
+                  handleSave(nameDraft.trim());
+                }
+              }}
+              placeholder="e.g. Smith – 12 Oak St kitchen"
+            />
+            <div className="mt-4 flex justify-end gap-3">
+              <button onClick={() => setNamingOpen(false)} className="text-sm border border-line-strong rounded-md px-4 py-2 hover:bg-paper">
+                Cancel
+              </button>
+              <button
+                disabled={!nameDraft.trim()}
+                onClick={() => {
+                  setQuoteName(nameDraft.trim());
+                  setNamingOpen(false);
+                  handleSave(nameDraft.trim());
+                }}
+                className="bg-brass hover:bg-brass-deep text-white rounded-md px-5 py-2 text-sm font-semibold disabled:opacity-40"
+              >
+                Save quote
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Finalise — the same actions as the top bar, so a long quote never needs a scroll back up */}
       <section className="mt-5 rounded-lg border-2 border-brass bg-paper-raised p-5">
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -3696,7 +3759,14 @@ export default function QuoteBuilder({
               Total <span className="font-mono font-semibold text-ink">${money(total)}</span> ex GST
               {hasPoaItems ? " (POA items excluded)" : ""} — save it, then export for the client.
             </p>
-            {savedNotice && <p className="text-sm font-medium text-spruce mt-1">✓ Saved</p>}
+            {savedNotice && (
+              <p className="text-sm font-medium text-spruce mt-1">
+                ✓ Saved —{" "}
+                <a href="/dashboard" className="underline">
+                  View my quotes
+                </a>
+              </p>
+            )}
             {saveError && <p className="text-sm font-medium text-brick mt-1">{saveError}</p>}
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -3727,7 +3797,7 @@ export default function QuoteBuilder({
               Export PDF
             </button>
             <button
-              onClick={handleSave}
+              onClick={requestSave}
               disabled={isPending}
               className="bg-brass hover:bg-brass-deep text-white rounded-md px-6 py-3 text-base font-semibold shadow-sm disabled:opacity-50"
             >

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import Link from "next/link";
 import SignOutButton from "./SignOutButton";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -43,6 +44,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
     <div className="min-h-screen">
       <header className="border-b border-line-strong bg-paper px-5 py-3 flex items-center gap-4">
         <h1 className="font-display text-lg font-semibold">QuoteMe</h1>
+        <Link href="/dashboard" className="text-sm font-medium text-brass-deep hover:underline">
+          My quotes
+        </Link>
         <span className="text-ink-soft text-sm flex-1">{org?.name}</span>
         {org?.subscription_status === "trialing" && !trialExpired && (
           <span className="text-xs text-brass-deep">

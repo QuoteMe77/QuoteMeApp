@@ -22,6 +22,7 @@ export type QuoteItemInput = {
 };
 
 export type QuoteMetaInput = {
+  quote_name?: string;
   business_name: string;
   business_contact: string;
   builder_name: string;
@@ -56,12 +57,24 @@ export async function saveQuote(
 
   let id = quoteId;
 
+  // quote_name needs the quote_name.sql column; until that has been run, save without it.
+  const { quote_name: _qn, ...metaNoName } = meta;
+  void _qn;
+  const isNameColumnError = (m?: string) => !!m && /quote_name/i.test(m);
+
   if (id) {
-    const { error } = await supabase
+    let { error } = await supabase
       .from("quotes")
       .update({ ...meta, total, updated_at: new Date().toISOString() })
       .eq("id", id)
       .eq("org_id", profile.org_id);
+    if (error && isNameColumnError(error.message)) {
+      ({ error } = await supabase
+        .from("quotes")
+        .update({ ...metaNoName, total, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .eq("org_id", profile.org_id));
+    }
     if (error) return { error: error.message };
 
     // Simplest correct approach: replace all line items on every save.
@@ -69,13 +82,20 @@ export async function saveQuote(
     const { error: delErr } = await supabase.from("quote_items").delete().eq("quote_id", id);
     if (delErr) return { error: delErr.message };
   } else {
-    const { data: inserted, error } = await supabase
+    let res = await supabase
       .from("quotes")
       .insert({ ...meta, total, org_id: profile.org_id, created_by: user.id })
       .select("id")
       .single();
-    if (error || !inserted) return { error: error?.message || "Could not create quote." };
-    id = inserted.id;
+    if (res.error && isNameColumnError(res.error.message)) {
+      res = await supabase
+        .from("quotes")
+        .insert({ ...metaNoName, total, org_id: profile.org_id, created_by: user.id })
+        .select("id")
+        .single();
+    }
+    if (res.error || !res.data) return { error: res.error?.message || "Could not create quote." };
+    id = res.data.id;
   }
 
   if (items.length > 0) {

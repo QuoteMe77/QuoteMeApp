@@ -11,14 +11,14 @@ export default async function QuotesListPage() {
 
   const { data: quotes } = await supabase
     .from("quotes")
-    .select("id, quote_ref, client_name, job_address, total, updated_at, created_at")
+    .select("*")
     .order("created_at", { ascending: false })
     .limit(100);
 
   return (
     <div className="max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-5">
-        <h2 className="font-display text-xl font-semibold">Quotes</h2>
+        <h2 className="font-display text-xl font-semibold">My quotes</h2>
         <Link
           href="/dashboard/quotes/new"
           className="bg-brass hover:bg-brass-deep text-white rounded-md px-4 py-2 text-sm font-medium"
@@ -44,9 +44,13 @@ export default async function QuotesListPage() {
             >
               <div>
                 <div className="font-medium text-sm">
-                  {q.quote_ref || "(no ref)"} — {q.client_name || "No client"}
+                  {q.quote_name || `${q.quote_ref || "(no ref)"} — ${q.client_name || "No client"}`}
                 </div>
-                <div className="text-xs text-ink-soft mt-0.5">{q.job_address || "—"}</div>
+                <div className="text-xs text-ink-soft mt-0.5">
+                  {q.quote_name ? `${q.client_name || "No client"} · ` : ""}
+                  {q.job_address || "—"}
+                  {q.quote_ref ? ` · Ref ${q.quote_ref}` : ""}
+                </div>
               </div>
               <div className="text-right">
                 <div className="font-mono text-sm">
