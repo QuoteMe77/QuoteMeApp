@@ -757,7 +757,7 @@ export default function QuoteBuilder({
       return priceBook.find((p) => p.name.toLowerCase().includes("curve - island bench 900mm high x 450mm wide")) || null;
     }
     if (/^delivery\b/.test(name)) {
-      return priceBook.find((p) => p.name.toLowerCase().trim() === "delivery local") || priceBook.find((p) => /^delivery local/i.test(p.name.trim())) || null;
+      return priceBook.find((p) => /^delivery city or hard access/i.test(p.name.trim())) || null;
     }
     if (/^drawers\b/.test(name)) {
       return findDrawerHardware(it.drawer_brand || "", /push.to.open|\bpto\b/.test(name));
