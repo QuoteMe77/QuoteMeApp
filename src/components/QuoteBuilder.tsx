@@ -3313,7 +3313,7 @@ export default function QuoteBuilder({
                               ⚠ {it.duplicate_wall_warning}
                             </span>
                           )}
-                          {planItemFlag[i] && <span className="block text-xs text-brick mt-0.5">⚠ {planItemFlag[i]}</span>}
+                          {planItemFlag[i] && <ReadNotes text={planItemFlag[i]} />}
                           {it.drawer_count > 0 && (
                             <span className="block text-xs text-ink-soft">
                               Drawers priced in: {it.drawer_brand || "Merivo (default — none nominated)"}
@@ -3629,6 +3629,90 @@ export default function QuoteBuilder({
   );
 }
 
+// Turns the long "how this was read" text on a line into a short headline plus a tidy, plain-English
+// breakdown the estimator (or client) can open: what the drawing says, how the lengths were added up,
+// and anything to double-check.
+function ReadNotes({ text }: { text: string }) {
+  const raw = (text || "").trim();
+  if (!raw) return null;
+  const aiFigure = /\(AI's own figure was ([\d.]+)[^)]*\)/i.exec(raw);
+  const checks: string[] = [];
+  const checkRe = /(Closest price-book match[^.]*\.|Could not confidently match[^.]*\.|Not found in your price book[^.]*\.|Low confidence[^.]*\.|Select drawer hardware|\(added from the column inventory[^)]*\))/gi;
+  let body = raw.replace(checkRe, (m) => {
+    checks.push(m.replace(/^\(|\)$/g, "").trim());
+    return "";
+  });
+  body = body.replace(/\(AI's own figure was[^)]*\)/i, "");
+  const colIdx = body.search(/columns \(mm\)\s*—/i);
+  const colsText = colIdx >= 0 ? body.slice(colIdx).replace(/^columns \(mm\)\s*—\s*/i, "") : "";
+  const notesText = colIdx >= 0 ? body.slice(0, colIdx) : body;
+  const notes = notesText.split(/;\s+/).map((x) => x.trim().replace(/[;.\s]+$/, "")).filter(Boolean);
+  const heightChain = /height chain/i.test(colsText);
+  const elevations = colsText
+    .replace(/\s*—\s*read from the drawing's own height chain and labels/i, "")
+    .split(/;\s+/)
+    .map((x) => {
+      const m = /^(.*?)\s*\(page (\d+),\s*(\d+)mm\):\s*(.+)$/.exec(x.trim());
+      if (!m) return x.trim() ? { title: x.trim(), sum: "" } : null;
+      const parts = m[4].split("+").map((n) => parseFloat(n)).filter((n) => !isNaN(n));
+      return { title: `${m[1]} · page ${m[2]}`, sum: `${parts.join(" + ")} = ${parts.reduce((a, b) => a + b, 0)}mm` };
+    })
+    .filter((x): x is { title: string; sum: string } => !!x);
+  const needsLook = checks.length > 0;
+  const headline = needsLook
+    ? "Check this line"
+    : heightChain
+    ? "Measured from the drawing"
+    : elevations.length > 0
+    ? "Lengths added up from the drawing"
+    : "Read from the drawing";
+  return (
+    <details className={`mt-1.5 rounded border px-2 py-1 text-xs ${needsLook ? "border-brick bg-paper text-brick" : "border-line bg-paper text-ink-soft"}`}>
+      <summary className="cursor-pointer font-medium">
+        {needsLook ? "⚠ " : "✓ "}
+        {headline}
+        <span className="font-normal"> — tap to see how</span>
+      </summary>
+      <div className="mt-1.5 space-y-1.5 text-ink-soft">
+        {checks.length > 0 && (
+          <div>
+            <p className="font-medium text-brick">To double-check</p>
+            <ul className="list-disc pl-4">
+              {checks.map((c, i) => (
+                <li key={i}>{c}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {elevations.length > 0 && (
+          <div>
+            <p className="font-medium text-ink">How the length was added up</p>
+            <ul className="list-disc pl-4">
+              {elevations.map((e, i) => (
+                <li key={i}>
+                  {e.title}
+                  {e.sum ? `: ${e.sum}` : ""}
+                </li>
+              ))}
+            </ul>
+            {aiFigure && <p className="mt-0.5">The AI's own estimate ({aiFigure[1]}) was replaced by these measured figures.</p>}
+          </div>
+        )}
+        {notes.length > 0 && (
+          <div>
+            <p className="font-medium text-ink">What the drawing says</p>
+            <ul className="list-disc pl-4">
+              {notes.map((n, i) => (
+                <li key={i}>{n.charAt(0).toUpperCase() + n.slice(1)}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
@@ -3668,11 +3752,7 @@ function LineItemRow({
           placeholder="Item name"
         />
         {showCategory && <p className="text-xs text-ink-soft mt-1">{item.category}</p>}
-        {item.flag_label && (
-          <p className="text-xs font-medium text-brick bg-paper border border-brick rounded px-2 py-1 mt-1.5">
-            ⚠ {item.flag_label}
-          </p>
-        )}
+        {item.flag_label && <ReadNotes text={item.flag_label} />}
         <label className="block mt-1.5">
           <span className="block text-[10px] uppercase tracking-wide text-ink-soft">PDF wording</span>
           <input
