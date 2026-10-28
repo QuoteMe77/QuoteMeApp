@@ -756,6 +756,9 @@ export default function QuoteBuilder({
     if (/curved end.*base|base.*curved/.test(name)) {
       return priceBook.find((p) => p.name.toLowerCase().includes("curve - island bench 900mm high x 450mm wide")) || null;
     }
+    if (/^delivery\b/.test(name)) {
+      return priceBook.find((p) => p.name.toLowerCase().trim() === "delivery local") || priceBook.find((p) => /^delivery local/i.test(p.name.trim())) || null;
+    }
     if (/^drawers\b/.test(name)) {
       return findDrawerHardware(it.drawer_brand || "", /push.to.open|\bpto\b/.test(name));
     }
@@ -1256,6 +1259,50 @@ export default function QuoteBuilder({
       note: "",
       duplicate_wall_warning: undefined,
     };
+  }
+
+  // Standard delivery allowances (Vicello convention): kitchens and pantries 1x / 1.5x / 2x by size,
+  // 1x per walk-in robe, and at least 1.5x across the other robes together.
+  function addStandardDelivery(items: PlanItemResult[]): PlanItemResult[] {
+    if (items.length === 0 || items.some((it) => /^delivery\b/i.test(it.name))) return items;
+    const rooms = new Map<string, PlanItemResult[]>();
+    for (const it of items) {
+      const k = it.room.trim();
+      if (!k) continue;
+      rooms.set(k, [...(rooms.get(k) || []), it]);
+    }
+    const out = [...items];
+    const mk = (room: string, qty: number, note: string): PlanItemResult => ({
+      ...(rooms.get(room)![0]),
+      name: "Delivery",
+      cabinet_type: "other",
+      calc: "QTY",
+      qty,
+      unit: "ea",
+      material_hint: "",
+      open: false,
+      drawer_count: 0,
+      pto_drawer_count: 0,
+      drawer_brand: "",
+      note,
+      confidence: "medium",
+      duplicate_wall_warning: undefined,
+      regions: [],
+    });
+    let robeRoom = "";
+    rooms.forEach((its, room) => {
+      const lm = its.filter((i) => i.calc === "LM" && ["base", "wall", "tall"].includes(i.cabinet_type)).reduce((a, i) => a + i.qty, 0);
+      if (/kitchen|pantry|scullery/i.test(room)) {
+        const qty = lm > 16 ? 2 : lm > 8 ? 1.5 : 1;
+        out.push(mk(room, qty, `Standard delivery allowance: ${qty}x for a ${qty === 2 ? "large" : qty === 1.5 ? "medium" : "standard"} ${/pantry/i.test(room) ? "pantry" : "kitchen"} (${Math.round(lm * 100) / 100} lm of cabinetry; over 8 lm = medium, over 16 lm = large)`));
+      } else if (/\bwir\b|walk[\s-]*in[\s-]*(robe|wardrobe)/i.test(room)) {
+        out.push(mk(room, 1, "Standard delivery allowance: 1x for a walk-in robe"));
+      } else if (/wardrobe|robe|\bbed\b|\bbed\s*\d/i.test(room) && !/vanity|bath|ensuite/i.test(room) && !robeRoom) {
+        robeRoom = room;
+      }
+    });
+    if (robeRoom) out.push(mk(robeRoom, 1.5, "Standard delivery allowance: at least 1.5x across the other robes together"));
+    return out;
   }
 
   function applyColumnInventory(
@@ -2135,7 +2182,7 @@ export default function QuoteBuilder({
           pageRoom
         );
         const inv = applyColumnInventory(merged, data.walls);
-        data.items = anchorRegions(flagMatchingBandLengths(inv.items), inv.report);
+        data.items = addStandardDelivery(anchorRegions(flagMatchingBandLengths(inv.items), inv.report));
         data.column_report = inv.report;
         data.column_base = { items: merged };
         data.column_warnings = inv.warnings;
