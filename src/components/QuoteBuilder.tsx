@@ -126,6 +126,26 @@ async function renderPdfThumbnails(file: File, onPage: (index: number, dataUrl: 
   }
 }
 
+// Renders one page of an uploaded document (PDF or image) at a size that stays sharp when zoomed,
+// and reports how many pages it has — used by the "View schedule / View plan" viewer.
+async function renderDocPage(file: File, page: number): Promise<{ imageUrl: string; pageCount: number }> {
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+  if (!isPdf) return { imageUrl: URL.createObjectURL(file), pageCount: 1 };
+  ensurePdfjsWorker();
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const idx = Math.min(Math.max(page, 1), pdf.numPages);
+  const pdfPage = await pdf.getPage(idx);
+  const base = pdfPage.getViewport({ scale: 1 });
+  const viewport = pdfPage.getViewport({ scale: Math.min(3.5, 2800 / base.width) });
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext("2d");
+  if (ctx) await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+  pdfPage.cleanup();
+  return { imageUrl: canvas.toDataURL("image/jpeg", 0.85), pageCount: pdf.numPages };
+}
+
 // Re-renders one page of the plan (PDF or a plain image upload) and draws a
 // highlight box at the AI-reported fractional bbox, so the estimator can see
 // exactly what the model was looking at rather than just trusting the
@@ -686,6 +706,25 @@ export default function QuoteBuilder({
     noRegions: string[]; // items that came back with no box at all
   } | null>(null);
   const scheduleFileRef = useRef<File | null>(null);
+  const [docViewer, setDocViewer] = useState<{
+    title: string;
+    file: File;
+    page: number;
+    pageCount: number;
+    imageUrl: string | null;
+    loading: boolean;
+    error: string | null;
+  } | null>(null);
+
+  async function showDocPage(file: File, title: string, page: number) {
+    setDocViewer((prev) => ({ title, file, page, pageCount: prev?.file === file ? prev.pageCount : 1, imageUrl: null, loading: true, error: null }));
+    try {
+      const r = await renderDocPage(file, page);
+      setDocViewer((prev) => (prev && prev.file === file ? { ...prev, page, pageCount: r.pageCount, imageUrl: r.imageUrl, loading: false } : prev));
+    } catch {
+      setDocViewer((prev) => (prev && prev.file === file ? { ...prev, loading: false, error: "Could not show this file." } : prev));
+    }
+  }
 
   function categoryPrefixFor(cabinetType: string): string | null {
     if (cabinetType === "base") return "Base cabinets";
@@ -3018,6 +3057,24 @@ export default function QuoteBuilder({
             {scheduleFileName ? `Schedule: ${scheduleFileName}` : "+ Attach finishes/hardware schedule (optional)"}
             <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" className="hidden" onChange={handleScheduleUpload} disabled={planUploading} />
           </label>
+          {scheduleFileName && scheduleFileRef.current && (
+            <button
+              type="button"
+              onClick={() => void showDocPage(scheduleFileRef.current!, `Schedule — ${scheduleFileName}`, 1)}
+              className="border border-line rounded-md px-3 py-2 text-xs hover:bg-paper text-brass-deep"
+            >
+              👁 View schedule
+            </button>
+          )}
+          {lastPlanFile && (
+            <button
+              type="button"
+              onClick={() => void showDocPage(lastPlanFile, `Plan — ${lastPlanFile.name}`, 1)}
+              className="border border-line rounded-md px-3 py-2 text-xs hover:bg-paper text-brass-deep"
+            >
+              👁 View plan
+            </button>
+          )}
         </div>
         {planError && <p className="text-brick text-sm mt-2">{planError}</p>}
 
@@ -3568,6 +3625,58 @@ export default function QuoteBuilder({
               Boxes are the AI&apos;s own best guess at where it read each item — a visual cross-check, not a verified
               measurement.
             </p>
+          </div>
+        </div>
+      )}
+
+      {docViewer && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setDocViewer(null)}>
+          <div className="bg-paper-raised rounded-lg p-4 max-w-6xl w-full max-h-[94vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-2 gap-3">
+              <span className="font-medium text-sm">
+                {docViewer.title}
+                {docViewer.pageCount > 1 ? ` — page ${docViewer.page} of ${docViewer.pageCount}` : ""}
+              </span>
+              <button onClick={() => setDocViewer(null)} className="text-ink-soft hover:text-ink text-lg leading-none">
+                ✕
+              </button>
+            </div>
+            {docViewer.loading && <p className="text-sm text-ink-soft py-8 text-center">Opening…</p>}
+            {docViewer.error && <p className="text-sm text-brick py-8 text-center">{docViewer.error}</p>}
+            {docViewer.imageUrl && <ZoomableImage src={docViewer.imageUrl} alt={docViewer.title} />}
+            {docViewer.pageCount > 1 && (
+              <div className="flex items-center gap-2 mt-3">
+                <button
+                  onClick={() => void showDocPage(docViewer.file, docViewer.title, docViewer.page - 1)}
+                  disabled={docViewer.page <= 1 || docViewer.loading}
+                  className="text-sm px-3 py-1 border border-line-strong rounded disabled:opacity-40"
+                >
+                  ← Prev
+                </button>
+                <button
+                  onClick={() => void showDocPage(docViewer.file, docViewer.title, docViewer.page + 1)}
+                  disabled={docViewer.page >= docViewer.pageCount || docViewer.loading}
+                  className="text-sm px-3 py-1 border border-line-strong rounded disabled:opacity-40"
+                >
+                  Next →
+                </button>
+                <span className="text-xs text-ink-soft ml-2">Go to page</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={docViewer.pageCount}
+                  className="w-16 px-1.5 py-1 text-sm border border-line-strong rounded"
+                  defaultValue={docViewer.page}
+                  key={docViewer.page}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const n = Math.min(docViewer.pageCount, Math.max(1, Number((e.target as HTMLInputElement).value) || 1));
+                      void showDocPage(docViewer.file, docViewer.title, n);
+                    }
+                  }}
+                />
+              </div>
+            )}
           </div>
         </div>
       )}
