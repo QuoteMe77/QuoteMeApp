@@ -666,6 +666,9 @@ export default function QuoteBuilder({
   const [planProgress, setPlanProgress] = useState("");
   const [expandedPlanItems, setExpandedPlanItems] = useState<Set<number>>(new Set());
   const [removedPlanItems, setRemovedPlanItems] = useState<Set<number>>(new Set());
+  // Which room's "add from price book" box is open in the plan review, and its search text.
+  const [pbAddRoom, setPbAddRoom] = useState<string | null>(null);
+  const [pbAddQuery, setPbAddQuery] = useState("");
   const [planError, setPlanError] = useState<string | null>(null);
   const [planResult, setPlanResult] = useState<{
     items: PlanItemResult[];
@@ -2466,6 +2469,44 @@ export default function QuoteBuilder({
     });
   }
 
+  // Add a price-book item straight into one room of the plan review list,
+  // already priced and ticked, so it goes onto the quote with the rest.
+  function addPriceBookToPlanRoom(pb: PriceBookItem, room: string) {
+    if (!planResult) return;
+    const idx = planResult.items.length;
+    const item: PlanItemResult = {
+      room,
+      name: pb.name,
+      cabinet_type: "other",
+      open: false,
+      calc: pb.calc,
+      qty: 1,
+      unit: pb.unit,
+      material_hint: "",
+      drawer_count: 0,
+      pto_drawer_count: 0,
+      drawer_brand: "",
+      note: "",
+      confidence: "high",
+    };
+    setPlanResult({ ...planResult, items: [...planResult.items, item] });
+    setPlanItemMaterial((prev) => ({ ...prev, [idx]: pb.id }));
+    setSelectedPlanItems((prev) => new Set(prev).add(idx));
+    setPbAddQuery("");
+  }
+
+  const pbAddResults = useMemo(() => {
+    const q = pbAddQuery.trim().toLowerCase();
+    if (!q) return [];
+    const words = q.split(/\s+/).filter(Boolean);
+    return priceBook
+      .filter((p) => {
+        const hay = `${p.name} ${p.category} ${p.section}`.toLowerCase();
+        return words.every((w) => hay.includes(w));
+      })
+      .slice(0, 12);
+  }, [pbAddQuery, priceBook]);
+
   function addSelectedPlanItems() {
     if (!planResult) return;
     const toAdd = planResult.items
@@ -2522,7 +2563,7 @@ export default function QuoteBuilder({
         rate: chosen ? Number(chosen.rate) : 0,
         qty: it.qty,
         area: areaFor(it),
-        note: chosen && !isDefaultMatch ? chosen.name : "",
+        note: chosen && !isDefaultMatch && chosen.name !== it.name ? chosen.name : "",
         pdf_label: it.name,
         poa: noPrice,
         flag_label: planItemFlag[i] ?? "",
@@ -3527,6 +3568,67 @@ export default function QuoteBuilder({
                       </div>
                     );
                             })}
+                            <div className="px-3 py-2 bg-paper">
+                              {pbAddRoom === room ? (
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      autoFocus
+                                      type="text"
+                                      className="flex-1 px-2 py-1 text-sm border border-line-strong rounded"
+                                      placeholder={`Search the price book to add to ${room}…`}
+                                      value={pbAddQuery}
+                                      onChange={(e) => setPbAddQuery(e.target.value)}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="text-xs text-ink-soft underline"
+                                      onClick={() => {
+                                        setPbAddRoom(null);
+                                        setPbAddQuery("");
+                                      }}
+                                    >
+                                      Done
+                                    </button>
+                                  </div>
+                                  {pbAddQuery.trim() && pbAddResults.length === 0 && (
+                                    <p className="text-xs text-ink-soft mt-1">No price-book items match.</p>
+                                  )}
+                                  {pbAddResults.length > 0 && (
+                                    <ul className="mt-1 border border-line rounded bg-white max-h-56 overflow-y-auto divide-y divide-line">
+                                      {pbAddResults.map((pb) => (
+                                        <li key={pb.id}>
+                                          <button
+                                            type="button"
+                                            className="w-full text-left px-2 py-1.5 text-sm hover:bg-paper flex justify-between gap-3"
+                                            onClick={() => addPriceBookToPlanRoom(pb, room)}
+                                          >
+                                            <span>
+                                              {pb.name}
+                                              <span className="text-xs text-ink-soft"> · {pb.category}</span>
+                                            </span>
+                                            <span className="text-ink-soft shrink-0">
+                                              ${money(Number(pb.rate))}/{pb.unit} ＋
+                                            </span>
+                                          </button>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="text-xs text-brass hover:text-brass-deep underline underline-offset-2"
+                                  onClick={() => {
+                                    setPbAddRoom(room);
+                                    setPbAddQuery("");
+                                  }}
+                                >
+                                  ＋ Add from price book
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </details>
                       );
