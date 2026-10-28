@@ -848,6 +848,10 @@ export default function QuoteBuilder({
   function shakerOverrideMatch(options: PriceBookItem[], it: PlanItemResult): PriceBookItem | null {
     const text = `${it.name} ${it.material_hint}`.toLowerCase();
     // A schedule that already names Surrano needs no override: normal matching finds it.
+    // "Polytec Vista" doors are the same Polytec door range the shop prices as Surrano.
+    if (/vista/.test(text) && /polytec|door/.test(text) && !/farmers|veneer|argyle|polyurethane|compact/.test(text)) {
+      return options.find((o) => /18mm polytec surr?ano doors/i.test(o.name)) || null;
+    }
     if (!/shaker/.test(text)) return null;
     if (/farmers|veneer|argyle|polyurethane|\bpu\b|compact/.test(text)) return null;
     if (!/woodmatt|polytec|melamine|laminate|smooth|ravine|matt|surr?ano|\bl\d+\b/.test(text)) return null;
