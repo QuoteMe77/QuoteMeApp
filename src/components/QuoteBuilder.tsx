@@ -2311,6 +2311,14 @@ export default function QuoteBuilder({
           : bestMaterialMatch(options, `${it.name} ${it.material_hint}`);
         if (match) defaults[i] = match.id;
         flags[i] = buildMaterialFlag(it, options, match, exact);
+        // Polyurethane shaker with no thickness stated: 18mm, 21mm and 32mm rows
+        // all fit the wording, so never present the first one as a confident match.
+        {
+          const t = `${it.name} ${it.material_hint}`.toLowerCase();
+          if (!defaultMatch && /polyurethane|\bpu\b/.test(t) && /shaker/.test(t) && !/\b(18|21|32)\s*mm/.test(t)) {
+            flags[i] = [flags[i], "Polyurethane shaker, thickness not stated on plan/schedule: confirm 18mm or 21mm."].filter(Boolean).join(" ");
+          }
+        }
         if (shaker) {
           flags[i] = [flags[i], "Shaker door on a Polytec/Woodmatt finish: priced as 18mm Polytec Surrano doors."]
             .filter(Boolean)
