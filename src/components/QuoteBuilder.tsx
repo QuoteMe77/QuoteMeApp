@@ -842,15 +842,16 @@ export default function QuoteBuilder({
 
   // House rule: when a designer/client asks for a SHAKER door on a Polytec /
   // Woodmatt / melamine-type finish, the shop builds it as a Polytec Surano
-  // shaker door, priced as the price book's 21mm Polyurethane Shaker Profile
+  // shaker door, priced as the price book's "18mm Polytec Surrano Doors From Polytec"
   // line. Does not apply when the finish already names its own door system
   // (Farmers veneer, an explicit polyurethane profile, Argyle).
   function shakerOverrideMatch(options: PriceBookItem[], it: PlanItemResult): PriceBookItem | null {
     const text = `${it.name} ${it.material_hint}`.toLowerCase();
+    // A schedule that already names Surrano needs no override: normal matching finds it.
     if (!/shaker/.test(text)) return null;
     if (/farmers|veneer|argyle|polyurethane|\bpu\b|compact/.test(text)) return null;
     if (!/woodmatt|polytec|melamine|laminate|smooth|ravine|matt|surano|\bl\d+\b/.test(text)) return null;
-    return options.find((o) => /21mm polyurethane shaker profile/i.test(o.name)) || null;
+    return options.find((o) => /18mm polytec surr?ano doors/i.test(o.name)) || null;
   }
 
   const MATERIAL_STOPWORDS = new Set([
@@ -2311,7 +2312,7 @@ export default function QuoteBuilder({
         if (match) defaults[i] = match.id;
         flags[i] = buildMaterialFlag(it, options, match, exact);
         if (shaker) {
-          flags[i] = [flags[i], "Shaker door on a Polytec/Woodmatt finish: priced as a Polytec Surano shaker (21mm shaker profile)."]
+          flags[i] = [flags[i], "Shaker door on a Polytec/Woodmatt finish: priced as 18mm Polytec Surrano doors."]
             .filter(Boolean)
             .join(" ");
         }
