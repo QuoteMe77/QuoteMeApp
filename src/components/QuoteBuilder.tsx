@@ -536,6 +536,13 @@ type LineItem = {
   flag_label: string;
 };
 
+// Drawings nominate drawers by short code ("MER"); the quote should read the full brand name.
+function drawerBrandName(code: string): string {
+  const t = (code || "").trim();
+  const map: Record<string, string> = { mer: "Merivo", merivo: "Merivo", ant: "Antaro", antaro: "Antaro", anataro: "Antaro", leg: "Legrabox", legrabox: "Legrabox", mov: "Movento", movento: "Movento" };
+  return map[t.toLowerCase()] || t || "Merivo";
+}
+
 function money(n: number) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -1633,7 +1640,7 @@ export default function QuoteBuilder({
       }
       const pto = Math.min(it.pto_drawer_count || 0, it.drawer_count);
       const standard = it.drawer_count - pto;
-      const brand = (it.drawer_brand || "").trim() || "Merivo";
+      const brand = drawerBrandName(it.drawer_brand);
       out.push({ ...it, drawer_count: 0, pto_drawer_count: 0 });
       const base = {
         ...it,
@@ -1891,7 +1898,7 @@ export default function QuoteBuilder({
       if (!template) return;
       out.push({
         ...template,
-        name: `Drawers — ${brand || "Merivo"}`,
+        name: `Drawers — ${drawerBrandName(brand)}`,
         cabinet_type: "other",
         calc: "QTY",
         qty: e.n,
@@ -2487,7 +2494,7 @@ export default function QuoteBuilder({
           newLines.push({
             key: newKey(),
             price_book_item_id: hardware?.id ?? null,
-            name: hardware ? hardware.name : `Drawers — ${it.drawer_brand || "Merivo"} (not in price book)`,
+            name: hardware ? hardware.name : `Drawers — ${drawerBrandName(it.drawer_brand)} (not in price book)`,
             category: "Hardware",
             calc: "QTY",
             unit: hardware?.unit ?? "ea",
@@ -2507,7 +2514,7 @@ export default function QuoteBuilder({
             price_book_item_id: ptoHardware?.id ?? null,
             name: ptoHardware
               ? `${ptoHardware.name} (Push to Open)`
-              : `Drawers — ${it.drawer_brand || "Merivo"} Push to Open (not in price book)`,
+              : `Drawers — ${drawerBrandName(it.drawer_brand)} Push to Open (not in price book)`,
             category: "Hardware",
             calc: "QTY",
             unit: ptoHardware?.unit ?? "ea",
