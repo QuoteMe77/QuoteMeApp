@@ -1,11 +1,12 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { saveQuote, deleteQuoteAndRedirect, type QuoteItemInput, type QuoteMetaInput } from "@/app/dashboard/quotes/actions";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
-import { downloadQuotePdf } from "@/lib/exportPdf";
-import { downloadQuoteDocx } from "@/lib/exportDocx";
+import { buildQuotePdf } from "@/lib/exportPdf";
+import { buildQuoteDocx } from "@/lib/exportDocx";
+import { saveAs } from "file-saver";
 import { PDFDocument } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist";
 import { normaliseFigure, findDimensionStrings } from "@/lib/dimensionRows";
@@ -572,6 +573,9 @@ export default function QuoteBuilder({
   const [isPending, startTransition] = useTransition();
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState(false);
+  type ExportedCopy = { id: string; format: string; filename: string; storage_path: string; total: number; created_at: string };
+  const [exportedCopies, setExportedCopies] = useState<ExportedCopy[]>([]);
+  const [exportNotice, setExportNotice] = useState("");
 
   const [businessName] = useState(defaultBusinessName);
   const [businessContact] = useState(defaultBusinessContact);
@@ -2720,14 +2724,79 @@ export default function QuoteBuilder({
     return true;
   }
 
-  function handleExportPdf() {
-    if (!confirmExport()) return;
-    downloadQuotePdf(buildExportData(), `${quoteRef || "quote"}.pdf`);
+  // Every export is downloaded AND a copy is kept against the saved quote, so the exact document
+  // that went to the client can always be found again (needs the quote_exports table + bucket).
+  async function loadExportedCopies() {
+    if (!quote?.id) return;
+    const supabase = createBrowserClient();
+    const { data } = await supabase
+      .from("quote_exports")
+      .select("id, format, filename, storage_path, total, created_at")
+      .eq("quote_id", quote.id)
+      .order("created_at", { ascending: false });
+    setExportedCopies((data as ExportedCopy[]) || []);
+  }
+  useEffect(() => {
+    void loadExportedCopies();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quote?.id]);
+
+  async function keepExportedCopy(format: "pdf" | "docx", blob: Blob, filename: string) {
+    if (!quote?.id) {
+      setExportNotice("Downloaded. Save the quote first if you want a copy kept in the app.");
+      return;
+    }
+    try {
+      const supabase = createBrowserClient();
+      const { data: u } = await supabase.auth.getUser();
+      const { data: prof } = await supabase.from("profiles").select("org_id").eq("id", u.user?.id || "").single();
+      const orgId = (prof as { org_id?: string } | null)?.org_id;
+      if (!orgId) throw new Error("no organisation");
+      const path = `${orgId}/${quote.id}/${Date.now()}-${filename.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const up = await supabase.storage.from("quote-exports").upload(path, blob, { contentType: blob.type || undefined });
+      if (up.error) throw up.error;
+      const ins = await supabase.from("quote_exports").insert({ org_id: orgId, quote_id: quote.id, format, filename, storage_path: path, total });
+      if (ins.error) throw ins.error;
+      setExportNotice("Downloaded, and a copy is kept below.");
+      await loadExportedCopies();
+    } catch {
+      setExportNotice("Downloaded, but a copy could not be kept in the app (the storage setup may not be run yet).");
+    }
   }
 
-  function handleExportDocx() {
+  async function downloadExportedCopy(c: ExportedCopy) {
+    const supabase = createBrowserClient();
+    const { data } = await supabase.storage.from("quote-exports").createSignedUrl(c.storage_path, 60, { download: c.filename });
+    if (data?.signedUrl) window.location.href = data.signedUrl;
+  }
+
+  async function deleteExportedCopy(c: ExportedCopy) {
+    if (!window.confirm(`Delete the saved copy "${c.filename}"? This cannot be undone.`)) return;
+    const supabase = createBrowserClient();
+    await supabase.storage.from("quote-exports").remove([c.storage_path]);
+    await supabase.from("quote_exports").delete().eq("id", c.id);
+    await loadExportedCopies();
+  }
+
+  function nextExportName(format: "pdf" | "docx") {
+    const n = exportedCopies.filter((c) => c.format === format).length + 1;
+    return `${quoteRef || "quote"}${quote?.id ? `_V${n}` : ""}.${format}`;
+  }
+
+  function handleExportPdf() {
     if (!confirmExport()) return;
-    downloadQuoteDocx(buildExportData(), `${quoteRef || "quote"}.docx`);
+    const name = nextExportName("pdf");
+    const doc = buildQuotePdf(buildExportData());
+    doc.save(name);
+    void keepExportedCopy("pdf", doc.output("blob"), name);
+  }
+
+  async function handleExportDocx() {
+    if (!confirmExport()) return;
+    const name = nextExportName("docx");
+    const blob = await buildQuoteDocx(buildExportData());
+    saveAs(blob, name);
+    void keepExportedCopy("docx", blob, name);
   }
 
   function handleDelete() {
@@ -3667,6 +3736,41 @@ export default function QuoteBuilder({
           </div>
         </div>
       </section>
+
+      {quote?.id && (
+        <section className="mt-5 rounded-lg border border-line-strong bg-paper-raised p-5">
+          <h3 className="font-display text-sm font-semibold mb-1 text-ink-soft uppercase tracking-wide">Exported copies</h3>
+          <p className="text-xs text-ink-soft mb-3">
+            Every PDF or Word export is kept here exactly as it went out, so you can always find what the client received.
+          </p>
+          {exportNotice && <p className="text-xs text-spruce mb-2">{exportNotice}</p>}
+          {exportedCopies.length === 0 ? (
+            <p className="text-sm text-ink-soft">Nothing exported yet.</p>
+          ) : (
+            <ul className="divide-y divide-line text-sm">
+              {exportedCopies.map((c) => (
+                <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                  <span>
+                    <span className="font-medium">{c.filename}</span>
+                    <span className="text-ink-soft">
+                      {" "}
+                      · {c.format === "pdf" ? "PDF" : "Word"} · {new Date(c.created_at).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })} · ${money(Number(c.total))}
+                    </span>
+                  </span>
+                  <span className="flex gap-3">
+                    <button onClick={() => void downloadExportedCopy(c)} className="text-brass hover:text-brass-deep underline underline-offset-2">
+                      Download
+                    </button>
+                    <button onClick={() => void deleteExportedCopy(c)} className="text-brick underline underline-offset-2">
+                      Delete
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       <style jsx global>{`
         .input {
