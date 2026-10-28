@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { saveQuote, deleteQuoteAndRedirect, type QuoteItemInput, type QuoteMetaInput } from "@/app/dashboard/quotes/actions";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
@@ -3763,6 +3763,29 @@ function ReadNotes({ text }: { text: string }) {
   );
 }
 
+// A text box that grows with its content, so long wording (e.g. a full price-book description) is
+// always fully visible instead of cut off at the edge of the box.
+function AutoText({ value, onChange, className, placeholder }: { value: string; onChange: (v: string) => void; className?: string; placeholder?: string }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight + 2}px`;
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      className={className}
+      style={{ resize: "none", overflow: "hidden", display: "block" }}
+      placeholder={placeholder}
+      value={value}
+      onChange={(e) => onChange(e.target.value.replace(/\n/g, " "))}
+    />
+  );
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
@@ -3795,21 +3818,21 @@ function LineItemRow({
       <span className="hidden sm:block text-xs text-ink-soft pt-2">{index}</span>
 
       <div className="min-w-0">
-        <input
+        <AutoText
           className="input font-medium"
           value={item.name}
-          onChange={(e) => onChange({ name: e.target.value })}
+          onChange={(v) => onChange({ name: v })}
           placeholder="Item name"
         />
         {showCategory && <p className="text-xs text-ink-soft mt-1">{item.category}</p>}
         {item.flag_label && <ReadNotes text={item.flag_label} />}
         <label className="block mt-1.5">
           <span className="block text-[10px] uppercase tracking-wide text-ink-soft">PDF wording</span>
-          <input
+          <AutoText
             className="input text-xs mt-0.5"
             placeholder="How this reads on the drawing (optional, shown on the quote if set)"
             value={item.pdf_label}
-            onChange={(e) => onChange({ pdf_label: e.target.value })}
+            onChange={(v) => onChange({ pdf_label: v })}
           />
         </label>
         <label className="block mt-1.5">
@@ -3823,11 +3846,11 @@ function LineItemRow({
         </label>
         <label className="block mt-1.5">
           <span className="block text-[10px] uppercase tracking-wide text-ink-soft">Note</span>
-          <input
+          <AutoText
             className="input text-xs mt-0.5"
             placeholder="Note (shown on quote)"
             value={item.note}
-            onChange={(e) => onChange({ note: e.target.value })}
+            onChange={(v) => onChange({ note: v })}
           />
         </label>
       </div>
