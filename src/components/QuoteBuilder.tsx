@@ -850,7 +850,7 @@ export default function QuoteBuilder({
     // A schedule that already names Surrano needs no override: normal matching finds it.
     if (!/shaker/.test(text)) return null;
     if (/farmers|veneer|argyle|polyurethane|\bpu\b|compact/.test(text)) return null;
-    if (!/woodmatt|polytec|melamine|laminate|smooth|ravine|matt|surano|\bl\d+\b/.test(text)) return null;
+    if (!/woodmatt|polytec|melamine|laminate|smooth|ravine|matt|surr?ano|\bl\d+\b/.test(text)) return null;
     return options.find((o) => /18mm polytec surr?ano doors/i.test(o.name)) || null;
   }
 
