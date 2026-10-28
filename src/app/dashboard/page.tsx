@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import QuoteListRow from "./QuoteListRow";
 
 export default async function QuotesListPage() {
   const supabase = createClient();
@@ -37,30 +38,7 @@ export default async function QuotesListPage() {
       ) : (
         <div className="bg-paper-raised border border-line-strong rounded-lg divide-y divide-line">
           {quotes.map((q) => (
-            <Link
-              key={q.id}
-              href={`/dashboard/quotes/${q.id}`}
-              className="flex items-center justify-between px-5 py-3.5 hover:bg-paper transition-colors"
-            >
-              <div>
-                <div className="font-medium text-sm">
-                  {q.quote_name || `${q.quote_ref || "(no ref)"} — ${q.client_name || "No client"}`}
-                </div>
-                <div className="text-xs text-ink-soft mt-0.5">
-                  {q.quote_name ? `${q.client_name || "No client"} · ` : ""}
-                  {q.job_address || "—"}
-                  {q.quote_ref ? ` · Ref ${q.quote_ref}` : ""}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="font-mono text-sm">
-                  ${Number(q.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </div>
-                <div className="text-xs text-ink-soft mt-0.5">
-                  {new Date(q.updated_at || q.created_at).toLocaleDateString()}
-                </div>
-              </div>
-            </Link>
+            <QuoteListRow key={q.id} q={q} />
           ))}
         </div>
       )}
