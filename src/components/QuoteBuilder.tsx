@@ -3611,6 +3611,56 @@ export default function QuoteBuilder({
         </div>
       </section>
 
+      {/* Finalise — the same actions as the top bar, so a long quote never needs a scroll back up */}
+      <section className="mt-5 rounded-lg border-2 border-brass bg-paper-raised p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h3 className="font-display text-lg font-semibold">Finalise quote</h3>
+            <p className="text-sm text-ink-soft">
+              Total <span className="font-mono font-semibold text-ink">${money(total)}</span> ex GST
+              {hasPoaItems ? " (POA items excluded)" : ""} — save it, then export for the client.
+            </p>
+            {savedNotice && <p className="text-sm font-medium text-spruce mt-1">✓ Saved</p>}
+            {saveError && <p className="text-sm font-medium text-brick mt-1">{saveError}</p>}
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={handleStartNew}
+              className="text-sm border border-line-strong rounded-md px-4 py-2.5 hover:bg-paper"
+              title="Clear this quote and start a new one (doesn't delete anything already saved)"
+            >
+              ↻ Start new quote
+            </button>
+            {quote && (
+              <button onClick={handleDelete} disabled={isPending} className="text-sm text-brick underline disabled:opacity-50">
+                Delete
+              </button>
+            )}
+            <button
+              onClick={handleExportDocx}
+              disabled={lineItems.length === 0}
+              className="text-sm font-medium border-2 border-line-strong rounded-md px-4 py-2.5 hover:bg-paper disabled:opacity-40"
+            >
+              Export Word
+            </button>
+            <button
+              onClick={handleExportPdf}
+              disabled={lineItems.length === 0}
+              className="text-sm font-medium border-2 border-line-strong rounded-md px-4 py-2.5 hover:bg-paper disabled:opacity-40"
+            >
+              Export PDF
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={isPending}
+              className="bg-brass hover:bg-brass-deep text-white rounded-md px-6 py-3 text-base font-semibold shadow-sm disabled:opacity-50"
+            >
+              {isPending ? "Saving…" : "Save quote"}
+            </button>
+          </div>
+        </div>
+      </section>
+
       <style jsx global>{`
         .input {
           width: 100%;
