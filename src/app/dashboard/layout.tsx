@@ -34,6 +34,23 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   console.log("[dashboard-layout] org lookup", { orgId: profile.org_id, hasOrg: !!org, orgError: orgError?.message ?? null });
 
+  // Plan reads this month (one upload = one read, however many chunks it was split into).
+  let readsThisMonth: number | null = null;
+  try {
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+    const { data: reads, error: readsError } = await supabase
+      .from("plan_reads")
+      .select("read_id")
+      .eq("org_id", profile.org_id)
+      .gte("created_at", monthStart.toISOString())
+      .limit(5000);
+    if (!readsError && reads) readsThisMonth = new Set(reads.map((r: { read_id: string }) => r.read_id)).size;
+  } catch {
+    readsThisMonth = null;
+  }
+
   const trialExpired =
     org?.subscription_status === "trialing" &&
     org?.trial_ends_at &&
@@ -48,6 +65,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
           My quotes
         </Link>
         <span className="text-ink-soft text-sm flex-1">{org?.name}</span>
+        {readsThisMonth !== null && (
+          <span className="text-xs text-ink-soft" title="Plans read this month">
+            Plan reads this month: <b className="text-ink">{readsThisMonth}</b>
+          </span>
+        )}
         {org?.subscription_status === "trialing" && !trialExpired && (
           <span className="text-xs text-brass-deep">
             Trial — ends {new Date(org.trial_ends_at!).toLocaleDateString()}

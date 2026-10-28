@@ -185,6 +185,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No file uploaded." }, { status: 400 });
   }
 
+  // Usage metering: one row per chunk, grouped by the browser's read id (one upload = one plan read).
+  // Failure to record (e.g. the plan_reads table not created yet) never blocks a read.
+  try {
+    const readId = typeof body?.readId === "string" ? body.readId.slice(0, 64) : "";
+    if (readId) {
+      await supabase.from("plan_reads").insert({ org_id: profile.org_id, user_id: user.id, read_id: readId, dim_strings: dimStrings.length });
+    }
+  } catch {
+    /* ignore */
+  }
+
   const admin = createAdminClient();
   const pathsToClean: string[] = [planPath];
   if (typeof schedulePath === "string" && schedulePath) pathsToClean.push(schedulePath);
@@ -203,7 +214,9 @@ export async function POST(request: NextRequest) {
         } as const);
   }
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  // maxRetries: when the shared API key is briefly rate-limited (429) or overloaded (529) the SDK waits
+  // and retries with backoff instead of failing the customer's read.
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 6 });
 
   let content: unknown[];
   try {

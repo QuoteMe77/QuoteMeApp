@@ -2087,6 +2087,7 @@ export default function QuoteBuilder({
         chunks.push([]);
       }
 
+      const readId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now());
       async function readChunk(indices: number[]): Promise<{ data?: any; error?: string }> {
         const chunkFile = indices.length > 0 ? await extractPdfPages(planFile, indices) : planFile;
         const planPath = storagePathFor(user!.id, chunkFile);
@@ -2108,7 +2109,7 @@ export default function QuoteBuilder({
         const res = await fetch("/api/plans/read", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ planPath, schedulePath, dimensionStrings: dim.strings, dimNote: dim.note }),
+          body: JSON.stringify({ planPath, schedulePath, dimensionStrings: dim.strings, dimNote: dim.note, readId }),
         });
         const rawBody = await res.text();
         let d: any;
