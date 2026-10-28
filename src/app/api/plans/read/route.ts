@@ -266,6 +266,10 @@ export async function POST(request: NextRequest) {
         type: "text",
         text: "That's the end of the worked examples. Now here is the ACTUAL job to read and quote from — nothing in it is pre-annotated, so read it fresh using what the examples above just illustrated:",
       },
+      // The instructions sit BEFORE the job so the whole opening (intro + worked examples + instructions) is
+      // identical on every read and can be prompt-cached: repeat calls pay a tenth of the normal input price
+      // for it. Only the drawing (and schedule) that follow change.
+      { type: "text", text: PLAN_PROMPT, cache_control: { type: "ephemeral" } },
       { type: "text", text: "Drawing to quote from:" },
       planBlock,
     ];
@@ -279,7 +283,7 @@ export async function POST(request: NextRequest) {
         scheduleBlock
       );
     }
-    content.push({ type: "text", text: PLAN_PROMPT });
+    content.push({ type: "text", text: "Now read the drawing above, following the instructions given before it, and return the JSON described there." });
   } catch (err) {
     console.error("Could not load uploaded file(s) from storage:", err);
     await admin.storage.from("plan-uploads").remove(pathsToClean);
