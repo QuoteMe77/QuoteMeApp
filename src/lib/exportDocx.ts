@@ -1,7 +1,9 @@
 import {
   AlignmentType,
+  Bookmark,
   BorderStyle,
   Document,
+  ImportedXmlComponent,
   ImageRun,
   Footer,
   Packer,
@@ -76,7 +78,23 @@ function cell(children: Paragraph[], width: number, fill?: string) {
   });
 }
 
-function bandRow(num: string, title: string, price: string, hasPoa: boolean) {
+// Live Word fields (so the figures re-tally when the top summary is edited): press Ctrl+A then F9
+// in Word to refresh. The cached text is what shows until then, so the document is always correct as built.
+const WNS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+const xmlEsc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function fieldRuns(instr: string, cached: string, o: { bold?: boolean; size?: number; color?: string } = {}) {
+  const rpr = `<w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>${o.bold ? "<w:b/>" : ""}<w:color w:val="${o.color ?? INK}"/><w:sz w:val="${o.size ?? 19}"/></w:rPr>`;
+  const r = (inner: string) => ImportedXmlComponent.fromXmlString(`<w:r ${WNS}>${rpr}${inner}</w:r>`) as unknown as TextRun;
+  return [
+    r('<w:fldChar w:fldCharType="begin"/>'),
+    r(`<w:instrText xml:space="preserve"> ${xmlEsc(instr)} </w:instrText>`),
+    r('<w:fldChar w:fldCharType="separate"/>'),
+    r(`<w:t xml:space="preserve">${xmlEsc(cached)}</w:t>`),
+    r('<w:fldChar w:fldCharType="end"/>'),
+  ];
+}
+
+function bandRow(num: string, title: string, price: string, hasPoa: boolean, refId?: string) {
   return new Table({
     columnWidths: [700, W - 700 - 2400, 2400],
     width: { size: W, type: WidthType.DXA },
@@ -92,7 +110,7 @@ function bandRow(num: string, title: string, price: string, hasPoa: boolean) {
               new Paragraph({
                 alignment: AlignmentType.RIGHT,
                 children: price
-                  ? [run(price, { bold: true, size: 21 }), ...(hasPoa ? [run("  + POA", { bold: true, size: 14, color: BRASS })] : [])]
+                  ? [...(refId ? fieldRuns(`REF ${refId} \\* MERGEFORMAT`, price, { bold: true, size: 21 }) : [run(price, { bold: true, size: 21 })]), ...(hasPoa ? [run("  + POA", { bold: true, size: 14, color: BRASS })] : [])]
                   : [run("INCLUDED", { bold: true, size: 15, color: BRASS })],
               }),
             ],
@@ -111,6 +129,7 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
     g.included.reduce((s, it) => s + it.qty * it.rate, 0) * (1 + quote.markupPct / 100);
   const subtotal = quote.total;
   const gst = subtotal * 0.1;
+  const roomSum = groups.map((_, i) => `room_${i + 1}`).join(" + ") || "0";
 
   const kids: (Paragraph | Table)[] = [];
 
@@ -203,7 +222,7 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
               [
                 new Paragraph({
                   alignment: AlignmentType.RIGHT,
-                  children: [run(`$${money(areaPrice(g))}`, { size: 20 }), ...(g.poa.length ? [run("  + POA", { bold: true, size: 14, color: BRASS })] : [])],
+                  children: [new Bookmark({ id: `room_${i + 1}`, children: [run(`$${money(areaPrice(g))}`, { size: 20 })] }), ...(g.poa.length ? [run("  + POA", { bold: true, size: 14, color: BRASS })] : [])],
                 }),
               ],
               sw[2],
@@ -223,24 +242,36 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
     new Paragraph({
       spacing: { before: 200, after: 40 },
       tabStops: [{ type: TabStopType.RIGHT, position: W }],
-      children: [run("Subtotal (ex GST)", { color: SOFT, size: 20 }), run(`\t$${money(subtotal)}`, { bold: true, size: 20 })],
+      children: [
+        run("Subtotal (ex GST)", { color: SOFT, size: 20 }),
+        run("\t", { size: 20 }),
+        new Bookmark({
+          id: "sub_total",
+          children: (groups.length > 0
+            ? fieldRuns(`= ${roomSum} \\# "$#,##0.00"`, `$${money(subtotal)}`, { bold: true, size: 20 })
+            : [run(`$${money(subtotal)}`, { bold: true, size: 20 })]) as TextRun[],
+        }),
+      ],
     }),
     new Paragraph({
       spacing: { after: 100 },
       tabStops: [{ type: TabStopType.RIGHT, position: W }],
-      children: [run("GST (10%)", { color: SOFT, size: 20 }), run(`\t$${money(gst)}`, { bold: true, size: 20 })],
+      children: [
+        run("GST (10%)", { color: SOFT, size: 20 }),
+        run("\t", { size: 20 }),
+        new Bookmark({ id: "gst_amount", children: fieldRuns(`= (${roomSum}) * 0.1 \\# "$#,##0.00"`, `$${money(gst)}`, { bold: true, size: 20 }) as TextRun[] }),
+      ],
     }),
-    new Table({
-      columnWidths: [W - 2800, 2800],
-      width: { size: W, type: WidthType.DXA },
-      borders: { top: none, bottom: none, left: none, right: none, insideHorizontal: none, insideVertical: none },
-      rows: [
-        new TableRow({
-          children: [
-            cell([new Paragraph({ alignment: AlignmentType.RIGHT, children: [run("Total (inc GST)", { bold: true, size: 22, color: "FFFFFF" })] })], W - 2800, INK),
-            cell([new Paragraph({ alignment: AlignmentType.RIGHT, children: [run(`$${money(subtotal + gst)}`, { bold: true, size: 26, color: "FFFFFF" })] })], 2800, INK),
-          ],
-        }),
+    // A shaded paragraph (not a table cell) so Word / other viewers evaluate the formula as a normal field.
+    new Paragraph({
+      shading: { type: ShadingType.CLEAR, fill: INK, color: "auto" },
+      spacing: { before: 60, after: 60 },
+      indent: { left: 120, right: 120 },
+      tabStops: [{ type: TabStopType.RIGHT, position: W - 120 }],
+      children: [
+        run("Total (inc GST)", { bold: true, size: 22, color: "FFFFFF" }),
+        run("\t", { size: 26, color: "FFFFFF" }),
+        ...(fieldRuns(`= (${roomSum}) * 1.1 \\# "$#,##0.00"`, `$${money(subtotal + gst)}`, { bold: true, size: 26, color: "FFFFFF" }) as TextRun[]),
       ],
     }),
     new Paragraph({
@@ -256,7 +287,7 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
   STANDARD_INCLUSIONS.forEach((s) => kids.push(bulletPara(s, 19)));
   groups.forEach((g, i) => {
     kids.push(new Paragraph({ spacing: { before: 240 }, children: [] }));
-    kids.push(bandRow(String(i + 1).padStart(2, "0"), g.area, `$${money(areaPrice(g))}`, g.poa.length > 0));
+    kids.push(bandRow(String(i + 1).padStart(2, "0"), g.area, `$${money(areaPrice(g))}`, g.poa.length > 0, `room_${i + 1}`));
     kids.push(new Paragraph({ spacing: { after: 80 }, children: [] }));
     g.included.forEach((it) => kids.push(bulletPara(it.note ? `${it.name} — ${it.note}` : it.name, 19)));
     if (g.poa.length) {
