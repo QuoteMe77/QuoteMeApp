@@ -147,7 +147,7 @@ async function renderPlanRegionPreview(
     const pageIndex = Math.min(Math.max(page, 1), pdf.numPages);
     const pdfPage = await pdf.getPage(pageIndex);
     const baseViewport = pdfPage.getViewport({ scale: 1 });
-    const scale = Math.min(2.5, 1600 / baseViewport.width);
+    const scale = Math.min(3.5, 2800 / baseViewport.width); // sharp enough to zoom in on small print
     const viewport = pdfPage.getViewport({ scale });
     canvas.width = viewport.width;
     canvas.height = viewport.height;
@@ -3559,7 +3559,7 @@ export default function QuoteBuilder({
                   {pg.error && <p className="text-sm text-brick">{pg.error}</p>}
                   {!pg.imageUrl && !pg.error && <p className="text-sm text-ink-soft py-6 text-center">Rendering…</p>}
                   {pg.imageUrl && (
-                    <img src={pg.imageUrl} alt={`Plan page ${pg.page}`} className="max-w-full rounded border border-line" />
+                    <ZoomableImage src={pg.imageUrl} alt={`Plan page ${pg.page}`} />
                   )}
                 </div>
               ))}
@@ -3578,7 +3578,7 @@ export default function QuoteBuilder({
           onClick={closeRegionPreview}
         >
           <div
-            className="bg-paper-raised rounded-lg p-4 max-w-3xl w-full max-h-[90vh] overflow-auto"
+            className="bg-paper-raised rounded-lg p-4 max-w-5xl w-full max-h-[94vh] overflow-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-2 gap-3">
@@ -3601,7 +3601,7 @@ export default function QuoteBuilder({
               </p>
             )}
             {regionPreview.imageUrl && (
-              <img src={regionPreview.imageUrl} alt="Plan region" className="max-w-full rounded border border-line" />
+              <ZoomableImage src={regionPreview.imageUrl} alt="Plan region" />
             )}
             {regionPreview.regions.length > 1 && (
               <div className="flex gap-2 mt-3">
@@ -3965,6 +3965,76 @@ function AutoText({ value, onChange, className, placeholder }: { value: string; 
       value={value}
       onChange={(e) => onChange(e.target.value.replace(/\n/g, " "))}
     />
+  );
+}
+
+// An image with zoom (+ / − / presets), drag-to-pan, and scrolling, so a small detail on a big drawing can
+// be checked closely. Zooming keeps the middle of what you're looking at in place.
+function ZoomableImage({ src, alt }: { src: string; alt: string }) {
+  const [zoom, setZoom] = useState(1);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const centre = useRef({ x: 0.5, y: 0.5 });
+  const drag = useRef<{ x: number; y: number; sl: number; st: number } | null>(null);
+
+  function setZ(next: number) {
+    const el = boxRef.current;
+    if (el && el.scrollWidth > 0 && el.scrollHeight > 0) {
+      centre.current = {
+        x: (el.scrollLeft + el.clientWidth / 2) / el.scrollWidth,
+        y: (el.scrollTop + el.clientHeight / 2) / el.scrollHeight,
+      };
+    }
+    setZoom(Math.min(6, Math.max(1, Math.round(next * 100) / 100)));
+  }
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    el.scrollLeft = centre.current.x * el.scrollWidth - el.clientWidth / 2;
+    el.scrollTop = centre.current.y * el.scrollHeight - el.clientHeight / 2;
+  }, [zoom]);
+
+  const btn = "text-sm px-2.5 py-1 border border-line-strong rounded hover:bg-paper";
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2 mb-2 text-xs">
+        <button type="button" className={btn} onClick={() => setZ(zoom - 0.5)} disabled={zoom <= 1} title="Zoom out">
+          −
+        </button>
+        <span className="w-12 text-center tabular-nums text-ink-soft">{Math.round(zoom * 100)}%</span>
+        <button type="button" className={btn} onClick={() => setZ(zoom + 0.5)} disabled={zoom >= 6} title="Zoom in">
+          +
+        </button>
+        {[1, 2, 3, 4].map((z) => (
+          <button key={z} type="button" className={`${btn} ${zoom === z ? "bg-paper font-medium" : ""}`} onClick={() => setZ(z)}>
+            {z === 1 ? "Fit" : `${z}x`}
+          </button>
+        ))}
+        <span className="text-ink-soft hidden sm:inline">{zoom > 1 ? "Drag the picture to move around" : "Use + or 2x / 3x to zoom in"}</span>
+      </div>
+      <div
+        ref={boxRef}
+        className={`overflow-auto rounded border border-line max-h-[70vh] ${zoom > 1 ? "cursor-grab active:cursor-grabbing" : ""}`}
+        onMouseDown={(e) => {
+          const el = boxRef.current;
+          if (!el || zoom <= 1) return;
+          drag.current = { x: e.clientX, y: e.clientY, sl: el.scrollLeft, st: el.scrollTop };
+          e.preventDefault();
+        }}
+        onMouseMove={(e) => {
+          const el = boxRef.current;
+          const d = drag.current;
+          if (!el || !d) return;
+          el.scrollLeft = d.sl - (e.clientX - d.x);
+          el.scrollTop = d.st - (e.clientY - d.y);
+        }}
+        onMouseUp={() => (drag.current = null)}
+        onMouseLeave={() => (drag.current = null)}
+        onDoubleClick={() => setZ(zoom >= 3 ? 1 : zoom + 1)}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt={alt} draggable={false} style={{ width: `${zoom * 100}%`, maxWidth: "none", display: "block" }} />
+      </div>
+    </div>
   );
 }
 
