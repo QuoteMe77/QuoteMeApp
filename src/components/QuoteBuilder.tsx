@@ -2523,7 +2523,22 @@ export default function QuoteBuilder({
       }
     });
 
-    setLineItems((prev) => [...prev, ...newLines]);
+    // Each room reads: base, wall, tall, then hardware (drawers), then everything else.
+    const rankOf = (l: LineItem) => {
+      const n = (l.pdf_label || l.name).trim().toLowerCase();
+      if (l.calc === "LM" && /^base\b/.test(n)) return 0;
+      if (l.calc === "LM" && /^wall\b/.test(n)) return 1;
+      if (l.calc === "LM" && /^tall\b/.test(n)) return 2;
+      if (l.category === "Hardware" || /^drawers?\b/.test(n)) return 3;
+      return 4;
+    };
+    const areaOrder = new Map<string, number>();
+    newLines.forEach((l) => areaOrder.has(l.area) || areaOrder.set(l.area, areaOrder.size));
+    const ordered = newLines
+      .map((l, idx) => ({ l, idx }))
+      .sort((a, b) => (areaOrder.get(a.l.area)! - areaOrder.get(b.l.area)!) || rankOf(a.l) - rankOf(b.l) || a.idx - b.idx)
+      .map((x) => x.l);
+    setLineItems((prev) => [...prev, ...ordered]);
     setPlanResult(null);
     setPlanItemMaterial({});
     setPlanItemFlag({});
