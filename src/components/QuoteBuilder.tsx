@@ -3027,23 +3027,33 @@ export default function QuoteBuilder({
                     : "the AI's reading of the picture (less reliable)"}
                   {planResult.dim_note ? ` — ${planResult.dim_note}` : ""}
                 </p>
-                <div className="mt-2 space-y-3">
+                <div className="mt-3 space-y-4">
                   {planResult.column_report.map((w, wi) => (
-                    <div key={wi}>
-                      <p className="font-medium">
-                        {w.name} (page {w.page}) — columns add to {w.sum}mm, printed overall {w.overall || "—"}mm{" "}
-                        {w.ok ? "✓" : "⚠ doesn't match"}
-                      </p>
-                      <table className="mt-1 w-full">
+                    <div key={wi} className="rounded border border-line">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 bg-paper px-3 py-1.5">
+                        <p className="font-medium">
+                          {w.room ? `${w.room} · ` : ""}
+                          {w.name.replace(/\s*\(page \d+,\s*\d+mm\)/i, "")} · page {w.page}
+                        </p>
+                        <p className={w.ok ? "text-ink-soft" : "text-red-700"}>
+                          {w.ok ? `✓ ${w.sum}mm matches the printed overall` : `⚠ columns add to ${w.sum}mm, printed overall ${w.overall || "—"}mm`}
+                        </p>
+                      </div>
+                      <table className="w-full table-fixed">
+                        <colgroup>
+                          <col className="w-16" />
+                          <col className="w-48" />
+                          <col />
+                        </colgroup>
                         <tbody>
                           {w.columns.map((c, ci) => (
-                            <tr key={ci} className="border-t border-line">
-                              <td className="py-0.5 pr-3 text-right tabular-nums">{c.width_mm}</td>
-                              <td className="py-0.5 pr-3">
+                            <tr key={ci} className={`border-t border-line ${c.kind === "gap" ? "text-ink-soft/70" : ""}`}>
+                              <td className="py-1 pl-3 pr-3 text-right tabular-nums">{c.width_mm}</td>
+                              <td className="py-1 pr-3">
                                 <select
                                   value={c.kind}
                                   onChange={(e) => setColumnKind(wi, ci, e.target.value)}
-                                  className="border border-line rounded px-1 py-0.5 bg-transparent"
+                                  className="w-full border border-line rounded px-1 py-0.5 bg-transparent"
                                 >
                                   {["base", "base_wall", "wall", "tall", "tall_wall", "gap"].map((k) => (
                                     <option key={k} value={k}>
@@ -3052,13 +3062,15 @@ export default function QuoteBuilder({
                                   ))}
                                 </select>
                               </td>
-                              <td className="py-0.5 text-ink-soft">{c.label}</td>
+                              <td className="py-1 pr-3 text-ink-soft">
+                                <span className="block truncate" title={c.label}>{c.label}</span>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
-                      <p className="mt-1 text-ink-soft">
-                        Base {w.base / 1000} lm · Wall {w.wall / 1000} lm · Tall {w.tall / 1000} lm
+                      <p className="border-t border-line bg-paper px-3 py-1.5 text-ink-soft tabular-nums">
+                        Base <b className="text-ink">{w.base / 1000}</b> lm · Wall <b className="text-ink">{w.wall / 1000}</b> lm · Tall <b className="text-ink">{w.tall / 1000}</b> lm
                       </p>
                     </div>
                   ))}
