@@ -2086,6 +2086,20 @@ export default function QuoteBuilder({
     });
   }
 
+  // Kitchen, Kitchen (Cooktop), Kitchen Island, Kitchen (Prep) are one room on
+  // the quote: put them all under "Kitchen" and keep the sub-area in the line
+  // name (e.g. "Base cabinet — Island") so the runs stay distinguishable.
+  function groupKitchenRooms(items: PlanItemResult[]): PlanItemResult[] {
+    return items.map((it) => {
+      const room = (it.room || "").trim();
+      const m = room.match(/^kitchen\b\s*[-–:]?\s*\(?([^)]*)\)?$/i);
+      if (!m) return it;
+      const sub = m[1].trim().replace(/\b\w/g, (c) => c.toUpperCase());
+      const name = sub && !it.name.toLowerCase().includes(sub.toLowerCase()) ? `${it.name} — ${sub}` : it.name;
+      return { ...it, room: "Kitchen", name };
+    });
+  }
+
   async function runPlanRead(planFile: File, scheduleFile: File | null) {
     setPlanUploading(true);
     setPlanError(null);
@@ -2257,7 +2271,7 @@ export default function QuoteBuilder({
           pageRoom
         );
         const inv = applyColumnInventory(merged, data.walls);
-        data.items = addStandardDelivery(anchorRegions(flagMatchingBandLengths(inv.items), inv.report));
+        data.items = addStandardDelivery(groupKitchenRooms(anchorRegions(flagMatchingBandLengths(inv.items), inv.report)));
         data.column_report = inv.report;
         data.column_base = { items: merged };
         data.column_warnings = inv.warnings;
