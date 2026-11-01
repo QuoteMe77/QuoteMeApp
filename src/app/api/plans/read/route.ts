@@ -321,7 +321,7 @@ export async function POST(request: NextRequest) {
     let message;
     try {
       message = await anthropic.messages.create({
-        model: "claude-sonnet-4-5",
+        model: process.env.PLAN_READ_MODEL || "claude-sonnet-4-5",
         // Extended thinking gives the model room to work through the plan
         // step by step — cross-checking one sheet against another, catching
         // its own contradictions — before it commits to the final JSON,
@@ -451,7 +451,7 @@ export async function POST(request: NextRequest) {
         { type: "text", text: COLUMNS_PROMPT },
       ];
       const msg = await anthropic.messages.create({
-        model: "claude-sonnet-4-5",
+        model: process.env.PLAN_READ_MODEL || "claude-sonnet-4-5",
         max_tokens: 7000,
         thinking: { type: "enabled", budget_tokens: 3000 },
         messages: [{ role: "user", content: colContent as never }],
@@ -574,7 +574,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
     try {
       const planIdx = content.findIndex((b) => (b as { text?: string }).text === "Drawing to quote from:") + 1;
       const msg = await anthropic.messages.create({
-        model: "claude-sonnet-4-5",
+        model: process.env.PLAN_READ_MODEL || "claude-sonnet-4-5",
         max_tokens: 6000,
         thinking: { type: "enabled", budget_tokens: 2500 },
         messages: [
