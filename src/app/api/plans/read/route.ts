@@ -3,6 +3,17 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { REFERENCE_EXAMPLES } from "./referenceExamples";
 
+// Newer models (Sonnet 5 and later) reject `thinking: { type: "enabled", budget_tokens }`
+// and want adaptive thinking steered by an effort level. Sonnet 4.x still uses the
+// budgeted form, so pick by model name and keep both working.
+const PLAN_MODEL = process.env.PLAN_READ_MODEL || "claude-sonnet-4-5";
+function thinkingFor(budgetTokens: number, effort: "low" | "medium" | "high" = "medium"): any {
+  const legacy = /claude-(sonnet|opus|haiku)-4/.test(PLAN_MODEL) || /claude-3/.test(PLAN_MODEL);
+  return legacy
+    ? { thinking: { type: "enabled", budget_tokens: budgetTokens } }
+    : { thinking: { type: "adaptive" }, output_config: { effort } };
+}
+
 export const runtime = "nodejs";
 // Raised from 60s: extended thinking (added below) gives the model time to
 // reason through a multi-page plan before answering, which adds real
@@ -321,7 +332,7 @@ export async function POST(request: NextRequest) {
     let message;
     try {
       message = await anthropic.messages.create({
-        model: process.env.PLAN_READ_MODEL || "claude-sonnet-4-5",
+        model: PLAN_MODEL,
         // Extended thinking gives the model room to work through the plan
         // step by step — cross-checking one sheet against another, catching
         // its own contradictions — before it commits to the final JSON,
@@ -330,8 +341,8 @@ export async function POST(request: NextRequest) {
         // to comfortably cover the thinking budget plus a full item list for
         // a busy multi-room plan; thinking requires temperature 1 (the
         // default here, left unset).
-        max_tokens: 10000,
-        thinking: { type: "enabled", budget_tokens: 4000 },
+        max_tokens: 16000,
+        ...thinkingFor(4000, "high"),
         messages: [
           {
             role: "user",
@@ -451,9 +462,9 @@ export async function POST(request: NextRequest) {
         { type: "text", text: COLUMNS_PROMPT },
       ];
       const msg = await anthropic.messages.create({
-        model: process.env.PLAN_READ_MODEL || "claude-sonnet-4-5",
-        max_tokens: 7000,
-        thinking: { type: "enabled", budget_tokens: 3000 },
+        model: PLAN_MODEL,
+        max_tokens: 12000,
+        ...thinkingFor(3000),
         messages: [{ role: "user", content: colContent as never }],
       } as never);
       const tb = msg.content.find((b) => b.type === "text");
@@ -574,9 +585,9 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
     try {
       const planIdx = content.findIndex((b) => (b as { text?: string }).text === "Drawing to quote from:") + 1;
       const msg = await anthropic.messages.create({
-        model: process.env.PLAN_READ_MODEL || "claude-sonnet-4-5",
-        max_tokens: 6000,
-        thinking: { type: "enabled", budget_tokens: 2500 },
+        model: PLAN_MODEL,
+        max_tokens: 10000,
+        ...thinkingFor(2500),
         messages: [
           {
             role: "user",
