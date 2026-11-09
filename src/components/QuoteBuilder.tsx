@@ -676,6 +676,7 @@ export default function QuoteBuilder({
     consistency_warnings?: string[];
     room_label_warning?: string;
     model_used?: string;
+    pipeline_trace?: string[];
     column_report?: ColumnReport[];
     column_warnings?: string[];
     column_source?: string;
@@ -2368,17 +2369,32 @@ export default function QuoteBuilder({
         if (pageTitles.size === 0 && pageTotal > 1) {
           data.consistency_warnings = [...(data.consistency_warnings || []), "Could not read the sheet titles from this PDF, so rooms were matched from the AI's own page guesses — check each room's lengths and drawers."];
         }
+        // Support trace: what each step did to the items of any room whose name contains WIR.
+        const trace: string[] = [];
+        const tr = (label: string, its: PlanItemResult[]) => {
+          const mine = its.filter((i) => /\bwir\b/i.test(i.room || ""));
+          trace.push(`${label}: ${mine.length ? mine.map((i) => `[${i.room}] ${i.name} ${i.qty}${i.unit}`).join("; ") : "(no WIR items)"}`);
+        };
+        tr("after AI read + room tidy", reconciled.items);
         const pageRoom = roomsByPageTitle(reconciled.items, pageTitles);
+        tr("after rooms matched to sheet titles", reconciled.items);
         assignWallRooms(reconciled.items, data.walls, pageRoom, pageTitles);
         reconciled.items = filterRegionsByRoom(reconciled.items, pageRoom);
+        tr("after region filter", reconciled.items);
         reconciled.items = dedupeSmallJobs(applyCurveMarks(reconciled.items, await extractRadiusMarks(planFile), pageRoom));
-        const merged = applyDrawerViews(
-          splitDrawersOut(applyTextCounts(mergePlanBands(reconciled.items), data.walls)),
-          await extractDrawerViews(planFile),
-          pageRoom
-        );
+        tr("after curved ends / small jobs", reconciled.items);
+        const mergedBands = mergePlanBands(reconciled.items);
+        tr("after merging bands", mergedBands);
+        const withCounts = splitDrawersOut(applyTextCounts(mergedBands, data.walls));
+        tr("after text counts / drawers split", withCounts);
+        const merged = applyDrawerViews(withCounts, await extractDrawerViews(planFile), pageRoom);
+        tr("after drawer labels", merged);
         const inv = applyColumnInventory(merged, data.walls);
+        tr("after column inventory", inv.items);
         data.items = addStandardDelivery(addRobeHangingRails(dedupeIntegratedAppliances(fixVanityWallCabinets(groupKitchenRooms(anchorRegions(flagMatchingBandLengths(inv.items), inv.report))))));
+        tr("final list", data.items);
+        trace.push(`walls: ${(data.walls || []).map((w: any) => `${w.room || "?"}/p${w.page}`).join(", ")}`);
+        data.pipeline_trace = trace;
         data.column_report = inv.report;
         data.column_base = { items: merged };
         data.column_warnings = inv.warnings;
@@ -3369,6 +3385,16 @@ export default function QuoteBuilder({
           <div className="mt-4">
             {planResult.model_used && (
               <p className="text-[11px] text-ink-soft mb-2">Read by: {planResult.model_used}</p>
+            )}
+            {planResult.pipeline_trace && planResult.pipeline_trace.length > 0 && (
+              <details className="text-[11px] text-ink-soft mb-2">
+                <summary className="cursor-pointer">Read trace (for support)</summary>
+                <ul className="mt-1 space-y-1 font-mono break-words">
+                  {planResult.pipeline_trace.map((t, k) => (
+                    <li key={k}>{t}</li>
+                  ))}
+                </ul>
+              </details>
             )}
             {planResult.room_label_warning && (
               <div className="bg-amber-50 border border-amber-300 rounded-md p-3 mb-3 text-xs text-amber-900">
