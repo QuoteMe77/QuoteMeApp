@@ -1339,6 +1339,39 @@ export default function QuoteBuilder({
 
   // Standard delivery allowances (Vicello convention): kitchens and pantries 1x / 1.5x / 2x by size,
   // 1x per walk-in robe, and at least 1.5x across the other robes together.
+  // A vanity / bathroom / ensuite / powder room never gets plain wall cabinets: what sits
+  // above the vanity is a recessed shaving cabinet. If one is already there, drop any wall
+  // run beside it; if not, turn the wall run into one shaving-cabinet line to check.
+  function fixVanityWallCabinets(items: PlanItemResult[]): PlanItemResult[] {
+    const isVanityRoom = (room: string) => /vanity|bath|ensuite|powder|\bwc\b|toilet/i.test(room);
+    const isShaving = (it: PlanItemResult) => /shaving/i.test(it.name);
+    const hasShaving = new Set(items.filter((i) => isShaving(i)).map((i) => (i.room || "").trim().toLowerCase()));
+    const out: PlanItemResult[] = [];
+    const converted = new Set<string>();
+    for (const it of items) {
+      const room = (it.room || "").trim();
+      if (!room || !isVanityRoom(room) || it.cabinet_type !== "wall" || it.calc !== "LM") {
+        out.push(it);
+        continue;
+      }
+      const key = room.toLowerCase();
+      if (hasShaving.has(key)) continue; // the shaving cabinet line already covers it
+      if (converted.has(key)) continue;
+      converted.add(key);
+      out.push({
+        ...it,
+        name: "Recessed shaving cabinet",
+        cabinet_type: "other",
+        calc: "QTY",
+        qty: 1,
+        unit: "ea",
+        note: `Wall cabinets in a vanity read as a recessed shaving cabinet (the drawing showed ${Math.round(it.qty * 1000)}mm): check the width.`,
+        regions: it.regions,
+      });
+    }
+    return out;
+  }
+
   // An integrated dishwasher / fridge drawn once but labelled on the plan view, the
   // elevation and the opening-space note was coming out as several lines. Within one
   // room keep one line per appliance kind (the largest quantity the AI gave it).
@@ -2345,7 +2378,7 @@ export default function QuoteBuilder({
           pageRoom
         );
         const inv = applyColumnInventory(merged, data.walls);
-        data.items = addStandardDelivery(addRobeHangingRails(dedupeIntegratedAppliances(groupKitchenRooms(anchorRegions(flagMatchingBandLengths(inv.items), inv.report)))));
+        data.items = addStandardDelivery(addRobeHangingRails(dedupeIntegratedAppliances(fixVanityWallCabinets(groupKitchenRooms(anchorRegions(flagMatchingBandLengths(inv.items), inv.report))))));
         data.column_report = inv.report;
         data.column_base = { items: merged };
         data.column_warnings = inv.warnings;

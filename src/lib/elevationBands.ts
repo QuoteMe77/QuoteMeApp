@@ -191,7 +191,35 @@ export function analyseElevations(words: TextWord[], strings: DimensionString[],
       }
       if (cab && blank) conflict = true;
     }
-    if (conflict) continue;
+    if (conflict) {
+      // The columns are different kinds of unit (e.g. tall cupboard | open hanging area | tall
+      // cupboard), so one height chain can't describe them. Judge each column on its own: how far
+      // up it has joinery, and whether a non-joinery item (wall protection, fittings) interrupts it.
+      const topMm = classified.length ? classified[classified.length - 1].hi : frameMm;
+      const perCol = cols.map((c) => {
+        if (c.width < 60) return "gap";
+        const xa = c.x0 * pageW;
+        const xb = c.x1 * pageW;
+        const flags = classified.filter((g) => g.big).map((g) => {
+          const ev = evidenceIn(g.lo, g.hi, xa, xb);
+          return { lo: g.lo, hi: g.hi, state: ev.pos > 0 ? "P" : ev.neg > 0 ? "N" : "E" };
+        });
+        const lowP = flags.some((f) => f.lo < 400 && f.state === "P");
+        const highP = flags.some((f) => f.lo >= 1500 && f.hi >= topMm - 400 && f.state === "P");
+        const interrupted = flags.some((f) => f.lo >= 400 && f.hi <= topMm - 400 && f.state === "N");
+        if (lowP && highP && !interrupted) return "tall";
+        if (lowP && highP) return "base_wall";
+        if (lowP) return "base";
+        if (highP) return "wall";
+        return "unknown";
+      });
+      if (perCol.includes("unknown")) continue; // not sure about a column: leave it to the AI
+      cols.forEach((c, i) => {
+        c.detKind = perCol[i] as typeof c.detKind;
+      });
+      str.det = { floor: floorY / pageH, k: s / pageH, bands, printed: undefined };
+      continue;
+    }
 
     // --- per-column membership -------------------------------------------------------------
     const kinds = cols.map(() => ({ base: false, wall: false, tall: false }));
