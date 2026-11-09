@@ -791,7 +791,8 @@ export default function QuoteBuilder({
     // one ignores material_hint entirely rather than only applying when the
     // schedule gave no extra detail.
     if (/hanging\s*rod|hanging\s*rail/.test(name)) {
-      return priceBook.find((p) => p.name.toLowerCase().includes("hanging rail in laundry")) || null;
+      const inRobe = /wardrobe|robe|\bwir\b/i.test(it.room || "") && !/vanity|bath|ensuite/i.test(it.room || "");
+      return priceBook.find((p) => p.name.toLowerCase().includes(inRobe ? "hanging rails in robe" : "hanging rail in laundry")) || null;
     }
     // Integrated appliances are priced as the joinery shop's "Integration
     // Service" line, never as a bin or a cabinet match.
@@ -1337,6 +1338,52 @@ export default function QuoteBuilder({
 
   // Standard delivery allowances (Vicello convention): kitchens and pantries 1x / 1.5x / 2x by size,
   // 1x per walk-in robe, and at least 1.5x across the other robes together.
+  // Every robe / wardrobe / walk-in robe gets hanging rails as standard. The price
+  // book line ("3-6x hanging rails in robe") is one price per robe, so each robe
+  // room carries exactly one such line, whether the AI found rods or missed them.
+  function addRobeHangingRails(items: PlanItemResult[]): PlanItemResult[] {
+    const isRobe = (room: string) => /wardrobe|robe|\bwir\b/i.test(room) && !/vanity|bath|ensuite/i.test(room);
+    const isRod = (it: PlanItemResult) => /hanging\s*(rod|rail)/i.test(it.name);
+    const rooms = new Map<string, PlanItemResult[]>();
+    for (const it of items) {
+      const k = (it.room || "").trim();
+      if (k && isRobe(k)) rooms.set(k, [...(rooms.get(k) || []), it]);
+    }
+    const out: PlanItemResult[] = [];
+    const seen = new Set<string>();
+    for (const it of items) {
+      const k = (it.room || "").trim();
+      if (k && rooms.has(k) && isRod(it)) {
+        if (seen.has(k)) continue; // collapse several rod lines into one per robe
+        seen.add(k);
+        out.push({ ...it, name: "Hanging rails", calc: "QTY", qty: 1, unit: "ea", note: it.note || "Hanging rails: standard in every robe" });
+      } else out.push(it);
+    }
+    rooms.forEach((its, room) => {
+      if (seen.has(room)) return;
+      const hasJoinery = its.some((i) => ["base", "wall", "tall"].includes(i.cabinet_type));
+      if (!hasJoinery) return;
+      out.push({
+        ...its[0],
+        name: "Hanging rails",
+        cabinet_type: "other",
+        calc: "QTY",
+        qty: 1,
+        unit: "ea",
+        material_hint: "",
+        open: false,
+        drawer_count: 0,
+        pto_drawer_count: 0,
+        drawer_brand: "",
+        note: "Hanging rails: standard in every robe (not called up separately on the drawing)",
+        confidence: "medium",
+        duplicate_wall_warning: undefined,
+        regions: [],
+      });
+    });
+    return out;
+  }
+
   function addStandardDelivery(items: PlanItemResult[]): PlanItemResult[] {
     if (items.length === 0 || items.some((it) => /^delivery\b/i.test(it.name))) return items;
     const rooms = new Map<string, PlanItemResult[]>();
@@ -2271,7 +2318,7 @@ export default function QuoteBuilder({
           pageRoom
         );
         const inv = applyColumnInventory(merged, data.walls);
-        data.items = addStandardDelivery(groupKitchenRooms(anchorRegions(flagMatchingBandLengths(inv.items), inv.report)));
+        data.items = addStandardDelivery(addRobeHangingRails(groupKitchenRooms(anchorRegions(flagMatchingBandLengths(inv.items), inv.report))));
         data.column_report = inv.report;
         data.column_base = { items: merged };
         data.column_warnings = inv.warnings;
