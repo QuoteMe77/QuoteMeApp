@@ -1338,6 +1338,32 @@ export default function QuoteBuilder({
 
   // Standard delivery allowances (Vicello convention): kitchens and pantries 1x / 1.5x / 2x by size,
   // 1x per walk-in robe, and at least 1.5x across the other robes together.
+  // An integrated dishwasher / fridge drawn once but labelled on the plan view, the
+  // elevation and the opening-space note was coming out as several lines. Within one
+  // room keep one line per appliance kind (the largest quantity the AI gave it).
+  function dedupeIntegratedAppliances(items: PlanItemResult[]): PlanItemResult[] {
+    const kindOf = (name: string) =>
+      /dishwasher|dish\s*drawer/i.test(name) ? "dishwasher" : /fridge|freezer/i.test(name) ? (/french/i.test(name) ? "fridge-french" : "fridge") : "";
+    const first = new Map<string, number>();
+    const out: PlanItemResult[] = [];
+    for (const it of items) {
+      const kind = it.cabinet_type === "other" || it.calc === "QTY" ? kindOf(it.name) : "";
+      if (!kind) {
+        out.push(it);
+        continue;
+      }
+      const key = `${(it.room || "").trim().toLowerCase()}|${kind}`;
+      const at = first.get(key);
+      if (at === undefined) {
+        first.set(key, out.length);
+        out.push(it);
+      } else if (it.qty > out[at].qty) {
+        out[at] = { ...out[at], qty: it.qty };
+      }
+    }
+    return out;
+  }
+
   // Every robe / wardrobe / walk-in robe gets hanging rails as standard. The price
   // book line ("3-6x hanging rails in robe") is one price per robe, so each robe
   // room carries exactly one such line, whether the AI found rods or missed them.
@@ -2318,7 +2344,7 @@ export default function QuoteBuilder({
           pageRoom
         );
         const inv = applyColumnInventory(merged, data.walls);
-        data.items = addStandardDelivery(addRobeHangingRails(groupKitchenRooms(anchorRegions(flagMatchingBandLengths(inv.items), inv.report))));
+        data.items = addStandardDelivery(addRobeHangingRails(dedupeIntegratedAppliances(groupKitchenRooms(anchorRegions(flagMatchingBandLengths(inv.items), inv.report)))));
         data.column_report = inv.report;
         data.column_base = { items: merged };
         data.column_warnings = inv.warnings;
