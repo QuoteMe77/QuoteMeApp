@@ -277,7 +277,13 @@ export function findDrawerView(words: TextWord[], pageNo: number, pageW: number,
     .map((t) => ({ x: t.x, y: t.y, kind: /ELEVATION/.test(t.m![1]) ? "elev" : /SECTION/.test(t.m![1]) ? "section" : /PLAN/.test(t.m![1]) ? "plan" : "other" }));
   const elevs = titles.filter((t) => t.kind === "elev");
   if (elevs.length === 0) return null;
-  const tokens = flat.filter((t) => /^(INNER )?DRAWER$/.test(t.s));
+  // "INNER DRAWER + JH19", "CUTLERY DRAWER + JH18" and plain "DRAWER" / "INNER DRAWER" labels all mark a drawer.
+  const tokens = flat.filter((t) => /^((INNER|CUTLERY) )?DRAWER( \+ JH\w+)?$/.test(t.s));
+  // The plan view often states the total as bay labels ("2 x DRAWERS" in each of three bays).
+  const planCount = flat.reduce((n, t) => {
+    const m = /^(\d{1,2})\s*X\s*DRAWERS?$/.exec(t.s);
+    return m ? n + parseInt(m[1], 10) : n;
+  }, 0);
   let best: DrawerView | null = null;
   for (const e of elevs) {
     const left = e.x - 0.03 * pageW;
@@ -287,9 +293,9 @@ export function findDrawerView(words: TextWord[], pageNo: number, pageW: number,
       .reduce((m, t) => Math.min(m, t.x - 0.03 * pageW), pageW * 0.99);
     const inView = tokens.filter((t) => t.xc >= left && t.xc <= nextX && t.y <= e.y && t.y >= e.y - 0.45 * pageH);
     if (inView.length === 0) continue;
-    const inner = inView.filter((t) => t.s === "INNER DRAWER").length;
+    const inner = inView.filter((t) => /^INNER DRAWER/.test(t.s)).length;
     const plain = inView.length - inner;
-    const count = Math.max(plain + inner, inner * 2);
+    const count = Math.max(plain + inner, inner * 2, planCount);
     if (best && best.count >= count) continue;
     const x0 = Math.min(...inView.map((t) => t.x)) - 10;
     const x1 = Math.max(...inView.map((t) => t.x + t.w)) + 10;
