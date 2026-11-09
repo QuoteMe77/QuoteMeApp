@@ -675,6 +675,7 @@ export default function QuoteBuilder({
     flags: string[];
     consistency_warnings?: string[];
     room_label_warning?: string;
+    model_used?: string;
     column_report?: ColumnReport[];
     column_warnings?: string[];
     column_source?: string;
@@ -3333,6 +3334,9 @@ export default function QuoteBuilder({
 
         {planResult && (
           <div className="mt-4">
+            {planResult.model_used && (
+              <p className="text-[11px] text-ink-soft mb-2">Read by: {planResult.model_used}</p>
+            )}
             {planResult.room_label_warning && (
               <div className="bg-amber-50 border border-amber-300 rounded-md p-3 mb-3 text-xs text-amber-900">
                 ⚠ {planResult.room_label_warning}

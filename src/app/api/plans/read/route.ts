@@ -802,6 +802,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
     ...primary,
     walls,
     column_source: dimStrings.length > 0 ? "pdf_text" : "ai_picture",
+    model_used: PLAN_MODEL,
     dim_note: typeof body?.dimNote === "string" ? body.dimNote.slice(0, 200) : "",
     consistency_warnings: [...consistencyWarnings, ...colWarnings],
   });
