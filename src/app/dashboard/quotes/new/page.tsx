@@ -22,10 +22,20 @@ export default async function NewQuotePage() {
     .eq("id", profile.org_id)
     .single();
 
-  const { data: priceBook } = await supabase
+  // The cost-breakdown columns only exist once cost_breakdown.sql has been run;
+  // fall back to the plain columns so the app keeps working until then.
+  const withCosts = await supabase
     .from("price_book_items")
     .select("id, calc, section, category, name, rate, unit, sort_order, cost_material, cost_hardware, cost_factory, cost_drafting, cost_studio, cost_install")
     .order("sort_order", { ascending: true });
+  const priceBook = withCosts.error
+    ? (
+        await supabase
+          .from("price_book_items")
+          .select("id, calc, section, category, name, rate, unit, sort_order")
+          .order("sort_order", { ascending: true })
+      ).data
+    : withCosts.data;
 
   return (
     <QuoteBuilder
