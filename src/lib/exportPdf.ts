@@ -28,7 +28,15 @@ export type ExportQuote = {
   subtotal: number;
   markupAmount: number;
   total: number;
+  // Set when this document is a variation to an existing quote.
+  variation?: { no: number; originalRef: string; payNote: string };
 };
+
+export const VARIATION_APPROVAL_TEXT = "I approve this variation and agree to the amount above.";
+export const VARIATION_PAY_NOTE = "This variation is payable with the next progress claim.";
+export function itemLabel(name: string, qty: number, isVariation: boolean) {
+  return isVariation && qty < 0 ? `CREDIT — ${name}` : name;
+}
 
 type RGB = [number, number, number];
 const ink: RGB = [36, 30, 23];
@@ -129,9 +137,9 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     doc.setCharSpace(0);
   }
   setFont("times", "normal", 19, ink);
-  spacedText("QUOTATION", W - mx, y + 2, 4.5, "right");
+  spacedText(quote.variation ? "VARIATION" : "QUOTATION", W - mx, y + 2, 4.5, "right");
   setFont("helvetica", "normal", 8.5, soft);
-  doc.text([quote.clientName, quote.quoteRef ? `Ref ${quote.quoteRef}` : ""].filter(Boolean).join(" · "), W - mx, y + 17, { align: "right" });
+  doc.text([quote.clientName, quote.quoteRef ? `Ref ${quote.quoteRef}` : "", quote.variation ? `Variation ${quote.variation.no}` : ""].filter(Boolean).join(" · "), W - mx, y + 17, { align: "right" });
   if (!vic && quote.businessContact) doc.text(quote.businessContact, mx, y + 17, { maxWidth: cw * 0.6 });
   y += 62;
 
@@ -195,9 +203,11 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     }
     y += 19;
   };
-  sumRow("—", "Standard Inclusions", "", false, false);
-  setFont("helvetica", "bold", 7.5, brass);
-  doc.text("INCLUDED", W - mx - 4, y - 6, { align: "right" });
+  if (!quote.variation) {
+    sumRow("—", "Standard Inclusions", "", false, false);
+    setFont("helvetica", "bold", 7.5, brass);
+    doc.text("INCLUDED", W - mx - 4, y - 6, { align: "right" });
+  }
   groups.forEach((g, i) => sumRow(String(i + 1).padStart(2, "0"), g.area, `$${money(areaPrice(g))}`, g.poa.length > 0, i % 2 === 0));
   y += 10;
 
@@ -225,6 +235,16 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     y
   );
   y += 16;
+  if (quote.variation) {
+    const vt = doc.splitTextToSize(
+      `This is a variation to Quote ${quote.variation.originalRef || "(original quote)"}. ${quote.variation.payNote} Credits are shown as negative amounts.`,
+      cw
+    ) as string[];
+    need(vt.length * 12 + 6);
+    setFont("helvetica", "bold", 9, ink);
+    doc.text(vt, mx, y);
+    y += vt.length * 12 + 6;
+  }
 
   // ---- Scope of works ----
   doc.addPage();
@@ -254,13 +274,15 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     }
     y += 36;
   };
-  areaBand("00", "Standard Inclusions", "", false);
-  bullets(STANDARD_INCLUSIONS);
-  y += 10;
+  if (!quote.variation) {
+    areaBand("00", "Standard Inclusions", "", false);
+    bullets(STANDARD_INCLUSIONS);
+    y += 10;
+  }
   groups.forEach((g, i) => {
     areaBand(String(i + 1).padStart(2, "0"), g.area, `$${money(areaPrice(g))}`, g.poa.length > 0);
     g.included.forEach((it) => {
-      bullets([it.note ? `${it.name} — ${it.note}` : it.name], 9.5);
+      bullets([it.note ? `${itemLabel(it.name, it.qty, !!quote.variation)} — ${it.note}` : itemLabel(it.name, it.qty, !!quote.variation)], 9.5);
     });
     if (g.poa.length > 0) {
       need(30);
@@ -316,7 +338,7 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   sectionHeading("Client Approval");
   need(150);
   setFont("helvetica", "normal", 9.5, soft);
-  doc.text(APPROVAL_TEXT, mx, y);
+  doc.text(quote.variation ? VARIATION_APPROVAL_TEXT : APPROVAL_TEXT, mx, y);
   y += 34;
   ["Client name", "Client signature", "Date"].forEach((l) => {
     setFont("helvetica", "bold", 7.5, soft);

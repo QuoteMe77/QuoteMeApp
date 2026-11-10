@@ -538,6 +538,11 @@ type QuoteRow = {
   valid_days: number | null;
   markup_pct: number | null;
   notes: string | null;
+  project_id?: string | null;
+  kind?: string | null;
+  rev?: number | null;
+  variation_no?: number | null;
+  status?: string | null;
 } | null;
 
 type QuoteItemRow = {
@@ -2994,8 +2999,25 @@ export default function QuoteBuilder({
     });
   }
 
+  const isVariation = quote?.kind === "variation";
+  const isLocked = quote?.status === "accepted" || quote?.status === "approved";
+  const docLabel = isVariation
+    ? `Variation ${quote?.variation_no ?? ""}`
+    : quote && (quote.rev || 1) > 1
+    ? `Edit quote — Rev ${String.fromCharCode(64 + Math.min(quote.rev || 1, 26))}`
+    : quote
+    ? "Edit quote"
+    : "New quote";
+
   function buildExportData() {
     return {
+      variation: isVariation
+        ? {
+            no: quote?.variation_no ?? 1,
+            originalRef: (quoteRef || "").replace(/-V\d+$/i, ""),
+            payNote: "This variation is payable with the next progress claim.",
+          }
+        : undefined,
       businessName,
       businessContact,
       builderName,
@@ -3162,9 +3184,14 @@ export default function QuoteBuilder({
   return (
     <div className="max-w-5xl mx-auto pb-16">
       <div className="flex items-center justify-between mb-5">
-        <h2 className="font-display text-xl font-semibold">
-          {quote ? "Edit quote" : "New quote"}
-        </h2>
+        <div>
+          {quote?.project_id && (
+            <a href={`/dashboard/projects/${quote.project_id}`} className="text-xs text-ink-soft underline block mb-0.5">
+              ← Project folder
+            </a>
+          )}
+          <h2 className="font-display text-xl font-semibold">{docLabel}</h2>
+        </div>
         <div className="flex items-center gap-3">
           {savedNotice && (
             <span className="text-xs text-spruce">
@@ -3207,13 +3234,25 @@ export default function QuoteBuilder({
           )}
           <button
             onClick={requestSave}
-            disabled={isPending}
+            disabled={isPending || isLocked}
             className="bg-brass hover:bg-brass-deep text-white rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50"
           >
-            {isPending ? "Saving…" : "Save quote"}
+            {isPending ? "Saving…" : isVariation ? "Save variation" : "Save quote"}
           </button>
         </div>
       </div>
+
+      {isLocked && (
+        <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+          🔒 This {isVariation ? "variation is approved" : "quote is accepted"} and locked, so it can&apos;t be saved over.{" "}
+          {isVariation ? "Reopen it from the project folder to change it." : "For changes, create a variation from the project folder (or reopen it there)."}
+        </div>
+      )}
+      {isVariation && !isLocked && (
+        <div className="mb-4 rounded-md border border-line-strong bg-paper-raised px-4 py-2 text-sm text-ink-soft">
+          Add only what has changed. Use a negative quantity for something removed (it shows as a CREDIT). The client, site and markup came from the original quote. Put the reason for the change in the notes. Payable with the next progress claim.
+        </div>
+      )}
 
       {/* Job details */}
       <section className="bg-paper-raised border border-line-strong rounded-lg p-5 mb-5">

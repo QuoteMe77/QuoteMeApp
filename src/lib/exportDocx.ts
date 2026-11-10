@@ -19,6 +19,7 @@ import {
 } from "docx";
 import { saveAs } from "file-saver";
 import type { ExportQuote } from "./exportPdf";
+import { VARIATION_APPROVAL_TEXT, itemLabel } from "./exportPdf";
 import { VICELLO_FOOTER_LINES, VICELLO_LOGO_PNG, VICELLO_LOGO_RATIO, VICELLO_MARK_PNG, isVicello } from "./brandAssets";
 import { APPROVAL_TEXT, STANDARD_INCLUSIONS, TERMS_SECTIONS, parseTermLine, quoteAreaGroups } from "./quoteTerms";
 
@@ -155,8 +156,8 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
             ),
             cell(
               [
-                new Paragraph({ alignment: AlignmentType.RIGHT, children: [run("QUOTATION", { size: 38, color: INK, font: "Times New Roman", spacing: 90 })] }),
-                new Paragraph({ alignment: AlignmentType.RIGHT, children: [run([quote.clientName, quote.quoteRef ? `Ref ${quote.quoteRef}` : ""].filter(Boolean).join(" · "), { size: 16, color: SOFT })] }),
+                new Paragraph({ alignment: AlignmentType.RIGHT, children: [run(quote.variation ? "VARIATION" : "QUOTATION", { size: 38, color: INK, font: "Times New Roman", spacing: 90 })] }),
+                new Paragraph({ alignment: AlignmentType.RIGHT, children: [run([quote.clientName, quote.quoteRef ? `Ref ${quote.quoteRef}` : "", quote.variation ? `Variation ${quote.variation.no}` : ""].filter(Boolean).join(" · "), { size: 16, color: SOFT })] }),
               ],
               W / 2
             ),
@@ -205,13 +206,15 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
         cell([new Paragraph({ alignment: AlignmentType.RIGHT, children: [run("PRICE EX GST", { bold: true, size: 15, color: SOFT, spacing: 20 })] })], sw[2]),
       ],
     }),
+    ...(quote.variation ? [] : [
     new TableRow({
       children: [
         cell([new Paragraph({ children: [run("—", { size: 16, color: SOFT })] })], sw[0]),
         cell([new Paragraph({ children: [run("Standard Inclusions", { size: 20 })] })], sw[1]),
         cell([new Paragraph({ alignment: AlignmentType.RIGHT, children: [run("INCLUDED", { bold: true, size: 15, color: BRASS })] })], sw[2]),
       ],
-    }),
+    })
+    ]),
     ...groups.map(
       (g, i) =>
         new TableRow({
@@ -283,13 +286,23 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
   // Scope of works
   kids.push(new Paragraph({ pageBreakBefore: true, children: [] }));
   kids.push(sectionHeading("Scope of Works"));
-  kids.push(bandRow("00", "Standard Inclusions", "", false), new Paragraph({ spacing: { after: 80 }, children: [] }));
-  STANDARD_INCLUSIONS.forEach((s) => kids.push(bulletPara(s, 19)));
+  if (!quote.variation) {
+    kids.push(bandRow("00", "Standard Inclusions", "", false), new Paragraph({ spacing: { after: 80 }, children: [] }));
+    STANDARD_INCLUSIONS.forEach((s) => kids.push(bulletPara(s, 19)));
+  }
+  if (quote.variation) {
+    kids.push(
+      new Paragraph({
+        spacing: { after: 160 },
+        children: [run(`This is a variation to Quote ${quote.variation.originalRef || "(original quote)"}. ${quote.variation.payNote} Credits are shown as negative amounts.`, { bold: true, size: 19 })],
+      })
+    );
+  }
   groups.forEach((g, i) => {
     kids.push(new Paragraph({ spacing: { before: 240 }, children: [] }));
     kids.push(bandRow(String(i + 1).padStart(2, "0"), g.area, `$${money(areaPrice(g))}`, g.poa.length > 0, `room_${i + 1}`));
     kids.push(new Paragraph({ spacing: { after: 80 }, children: [] }));
-    g.included.forEach((it) => kids.push(bulletPara(it.note ? `${it.name} — ${it.note}` : it.name, 19)));
+    g.included.forEach((it) => kids.push(bulletPara(it.note ? `${itemLabel(it.name, it.qty, !!quote.variation)} — ${it.note}` : itemLabel(it.name, it.qty, !!quote.variation), 19)));
     if (g.poa.length) {
       kids.push(new Paragraph({ spacing: { before: 120, after: 60 }, keepNext: true, children: [run("PRICE ON APPLICATION — NOT INCLUDED IN THE PRICE ABOVE", { bold: true, size: 14, color: BRASS, spacing: 16 })] }));
       g.poa.forEach((it) =>
@@ -314,7 +327,7 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
 
   // Client approval
   kids.push(sectionHeading("Client Approval"));
-  kids.push(new Paragraph({ keepNext: true, spacing: { after: 240 }, children: [run(APPROVAL_TEXT, { color: SOFT })] }));
+  kids.push(new Paragraph({ keepNext: true, spacing: { after: 240 }, children: [run(quote.variation ? VARIATION_APPROVAL_TEXT : APPROVAL_TEXT, { color: SOFT })] }));
   ["Client name", "Client signature", "Date"].forEach((l) =>
     kids.push(
       new Paragraph({
