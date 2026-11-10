@@ -7,7 +7,9 @@ import { REFERENCE_EXAMPLES } from "./referenceExamples";
 // and want adaptive thinking steered by an effort level. Sonnet 4.x still uses the
 // budgeted form, so pick by model name and keep both working.
 const PLAN_MODEL = process.env.PLAN_READ_MODEL || "claude-sonnet-4-5";
-function thinkingFor(budgetTokens: number, effort: "low" | "medium" | "high" = "medium"): any {
+const EFFORT_OVERRIDE = (["low", "medium", "high"] as const).find((e) => e === process.env.PLAN_READ_EFFORT);
+function thinkingFor(budgetTokens: number, effortIn: "low" | "medium" | "high" = "medium"): any {
+  const effort = EFFORT_OVERRIDE || effortIn;
   const legacy = /claude-(sonnet|opus|haiku)-4/.test(PLAN_MODEL) || /claude-3/.test(PLAN_MODEL);
   return legacy
     ? { thinking: { type: "enabled", budget_tokens: budgetTokens } }
@@ -334,6 +336,7 @@ export async function POST(request: NextRequest) {
   // warning instead of silently going with whichever read happened to come
   // back. This doubles the API cost and the thinking latency of a single
   // call, but a wrong, confidently-presented number is worse than that.
+  let lastReadDebug = "";
   async function readOnce(): Promise<{ parsed: ParsedPlan; error: null } | { parsed: null; error: string }> {
     let message;
     try {
@@ -382,6 +385,7 @@ export async function POST(request: NextRequest) {
       return { parsed: null, error: "No response from the model." };
     }
 
+    lastReadDebug = `stop=${(message as { stop_reason?: string }).stop_reason}; out_tokens=${(message as { usage?: { output_tokens?: number } }).usage?.output_tokens ?? "?"}; effort=${EFFORT_OVERRIDE || "high"}`;
     if ((message as { stop_reason?: string }).stop_reason === "max_tokens") {
       return {
         parsed: null,
@@ -805,6 +809,7 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
     walls,
     column_source: dimStrings.length > 0 ? "pdf_text" : "ai_picture",
     model_used: PLAN_MODEL,
+    read_debug: `${lastReadDebug}; items=${primary.items.length}`,
     dim_note: typeof body?.dimNote === "string" ? body.dimNote.slice(0, 200) : "",
     consistency_warnings: [...consistencyWarnings, ...colWarnings],
   });

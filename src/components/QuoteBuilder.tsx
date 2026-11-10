@@ -2337,6 +2337,12 @@ export default function QuoteBuilder({
       await Promise.all(workers);
 
       const okResults = results.filter((r) => r?.data).map((r) => r!.data);
+      const chunkTrace = results.map((r, i) => {
+        const pg = chunks[i].length ? `pages ${chunks[i][0] + 1}-${chunks[i][chunks[i].length - 1] + 1}` : "whole file";
+        return r?.data
+          ? `Chunk ${i + 1} (${pg}): ${r.data.read_debug || "no debug"}; rooms=${Array.from(new Set((r.data.items || []).map((x: any) => x.room || "General"))).join(", ")}`
+          : `Chunk ${i + 1} (${pg}): FAILED ${r?.error || ""}`;
+      });
       const failed = results.map((r, i) => (r?.error ? `pages ${chunks[i][0] + 1}–${chunks[i][chunks[i].length - 1] + 1}: ${r.error}` : "")).filter(Boolean);
       if (okResults.length === 0) {
         setPlanError(failed[0] || "Could not read this plan.");
@@ -2370,7 +2376,7 @@ export default function QuoteBuilder({
           data.consistency_warnings = [...(data.consistency_warnings || []), "Could not read the sheet titles from this PDF, so rooms were matched from the AI's own page guesses — check each room's lengths and drawers."];
         }
         // Support trace: what each step did to the items of any room whose name contains WIR.
-        const trace: string[] = [];
+        const trace: string[] = [...chunkTrace];
         const tr = (label: string, its: PlanItemResult[]) => {
           const mine = its.filter((i) => /\bwir\b/i.test(i.room || ""));
           trace.push(`${label}: ${mine.length ? mine.map((i) => `[${i.room}] ${i.name} ${i.qty}${i.unit}`).join("; ") : "(no WIR items)"}`);
