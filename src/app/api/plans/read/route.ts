@@ -337,7 +337,7 @@ export async function POST(request: NextRequest) {
   // back. This doubles the API cost and the thinking latency of a single
   // call, but a wrong, confidently-presented number is worse than that.
   let lastReadDebug = "";
-  async function readOnce(): Promise<{ parsed: ParsedPlan; error: null } | { parsed: null; error: string }> {
+  async function readOnce(effortIn: "low" | "medium" | "high" = "medium"): Promise<{ parsed: ParsedPlan; error: null } | { parsed: null; error: string }> {
     let message;
     try {
       message = await anthropic.messages.create({
@@ -351,7 +351,7 @@ export async function POST(request: NextRequest) {
         // a busy multi-room plan; thinking requires temperature 1 (the
         // default here, left unset).
         max_tokens: 16000,
-        ...thinkingFor(4000, "high"),
+        ...thinkingFor(4000, effortIn),
         messages: [
           {
             role: "user",
@@ -381,11 +381,14 @@ export async function POST(request: NextRequest) {
     }
 
     const textBlock = message.content.find((block) => block.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      return { parsed: null, error: "No response from the model." };
+    if (!textBlock || textBlock.type !== "text" || (message as { stop_reason?: string }).stop_reason === "max_tokens") {
+      // Thinking can use up the whole token allowance before any answer is written.
+      // Retry once with minimal thinking so the answer fits.
+      if (effortIn !== "low") return readOnce("low");
     }
+    if (!textBlock || textBlock.type !== "text") return { parsed: null, error: "No response from the model." };
 
-    lastReadDebug = `stop=${(message as { stop_reason?: string }).stop_reason}; out_tokens=${(message as { usage?: { output_tokens?: number } }).usage?.output_tokens ?? "?"}; effort=${EFFORT_OVERRIDE || "high"}`;
+    lastReadDebug = `stop=${(message as { stop_reason?: string }).stop_reason}; out_tokens=${(message as { usage?: { output_tokens?: number } }).usage?.output_tokens ?? "?"}; effort=${EFFORT_OVERRIDE || effortIn}`;
     if ((message as { stop_reason?: string }).stop_reason === "max_tokens") {
       return {
         parsed: null,
