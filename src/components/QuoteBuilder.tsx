@@ -512,7 +512,22 @@ type PriceBookItem = {
   rate: number;
   unit: string;
   sort_order: number;
+  cost_material?: number | null;
+  cost_hardware?: number | null;
+  cost_factory?: number | null;
+  cost_drafting?: number | null;
+  cost_studio?: number | null;
+  cost_install?: number | null;
 };
+
+const COST_DEPTS: { key: "cost_material" | "cost_hardware" | "cost_factory" | "cost_drafting" | "cost_studio" | "cost_install"; label: string }[] = [
+  { key: "cost_material", label: "Material" },
+  { key: "cost_hardware", label: "Hardware" },
+  { key: "cost_factory", label: "Factory" },
+  { key: "cost_drafting", label: "Drafting" },
+  { key: "cost_studio", label: "Studio" },
+  { key: "cost_install", label: "Install" },
+];
 
 type QuoteRow = {
   id: string;
@@ -2844,6 +2859,31 @@ export default function QuoteBuilder({
   const total = subtotal + markupAmount;
   const hasPoaItems = lineItems.some((it) => it.poa);
 
+  // Where the cost goes: each line's rate is split by its price book row's
+  // department breakdown (scaled if the rate was edited). Lines with no
+  // breakdown go to "Not broken down".
+  const profitView = useMemo(() => {
+    const byId = new Map(priceBook.map((p) => [p.id, p]));
+    const depts: Record<string, number> = {};
+    COST_DEPTS.forEach((d) => (depts[d.key] = 0));
+    let unallocated = 0;
+    const areas = new Map<string, number>();
+    for (const it of lineItems) {
+      if (it.poa) continue;
+      const lineCost = it.qty * it.rate;
+      areas.set(it.area || "General", (areas.get(it.area || "General") || 0) + lineCost);
+      const pb = it.price_book_item_id ? byId.get(it.price_book_item_id) : undefined;
+      const parts = pb ? COST_DEPTS.map((d) => Number(pb[d.key]) || 0) : [];
+      const sum = parts.reduce((a, b) => a + b, 0);
+      if (!pb || sum <= 0) {
+        unallocated += lineCost;
+        continue;
+      }
+      COST_DEPTS.forEach((d, i) => (depts[d.key] += lineCost * (parts[i] / sum)));
+    }
+    return { depts, unallocated, areas: Array.from(areas.entries()) };
+  }, [lineItems, priceBook]);
+
   function addFromPriceBook(pb: PriceBookItem) {
     setLineItems((prev) => [
       ...prev,
@@ -4112,6 +4152,68 @@ export default function QuoteBuilder({
           )}
         </div>
       </section>
+
+      {subtotal > 0 && (
+        <section className="mt-4 rounded-lg border border-line bg-paper-raised p-4">
+          <details>
+            <summary className="cursor-pointer font-semibold">
+              Profit &amp; cost breakdown — profit ${money(markupAmount)} ({total > 0 ? ((markupAmount / total) * 100).toFixed(1) : "0.0"}% of sell price)
+            </summary>
+            <div className="mt-3 text-sm">
+              <div className="grid grid-cols-4 gap-2 font-semibold text-ink-soft border-b border-line pb-1">
+                <span>Department</span>
+                <span className="text-right">Cost</span>
+                <span className="text-right">% of cost</span>
+                <span className="text-right">Sell (with markup)</span>
+              </div>
+              {COST_DEPTS.map((d) => {
+                const c = profitView.depts[d.key];
+                return (
+                  <div key={d.key} className="grid grid-cols-4 gap-2 py-0.5">
+                    <span>{d.label}</span>
+                    <span className="text-right font-mono">${money(c)}</span>
+                    <span className="text-right font-mono">{subtotal > 0 ? ((c / subtotal) * 100).toFixed(1) : "0.0"}%</span>
+                    <span className="text-right font-mono">${money(c * (1 + markupPct / 100))}</span>
+                  </div>
+                );
+              })}
+              {profitView.unallocated > 0.005 && (
+                <div className="grid grid-cols-4 gap-2 py-0.5 text-ink-soft">
+                  <span>Not broken down</span>
+                  <span className="text-right font-mono">${money(profitView.unallocated)}</span>
+                  <span className="text-right font-mono">{((profitView.unallocated / subtotal) * 100).toFixed(1)}%</span>
+                  <span className="text-right font-mono">${money(profitView.unallocated * (1 + markupPct / 100))}</span>
+                </div>
+              )}
+              <div className="grid grid-cols-4 gap-2 border-t border-line-strong pt-1 mt-1 font-semibold">
+                <span>Total cost</span>
+                <span className="text-right font-mono">${money(subtotal)}</span>
+                <span />
+                <span className="text-right font-mono">${money(total)}</span>
+              </div>
+              <div className="flex justify-between mt-2">
+                <span className="text-ink-soft">Profit (markup on cost)</span>
+                <span className="font-mono font-semibold">${money(markupAmount)}</span>
+              </div>
+              {profitView.areas.length > 1 && (
+                <div className="mt-3">
+                  <div className="font-semibold text-ink-soft border-b border-line pb-1 mb-1">By room — cost and profit</div>
+                  {profitView.areas.map(([a, c]) => (
+                    <div key={a} className="grid grid-cols-3 gap-2 py-0.5">
+                      <span>{a}</span>
+                      <span className="text-right font-mono">${money(c)}</span>
+                      <span className="text-right font-mono">+${money(c * (markupPct / 100))}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-ink-soft mt-2">
+                Cost is the price book rate. Each rate is split by its Material / Hardware / Factory / Drafting / Studio / Install breakdown. Lines with no breakdown show as &quot;Not broken down&quot;. POA items are excluded.
+              </p>
+            </div>
+          </details>
+        </section>
+      )}
 
       {namingOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">

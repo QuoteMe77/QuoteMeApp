@@ -27,7 +27,7 @@ export default async function EditQuotePage({ params }: { params: { id: string }
 
   const { data: priceBook } = await supabase
     .from("price_book_items")
-    .select("id, calc, section, category, name, rate, unit, sort_order")
+    .select("id, calc, section, category, name, rate, unit, sort_order, cost_material, cost_hardware, cost_factory, cost_drafting, cost_studio, cost_install")
     .order("sort_order", { ascending: true });
 
   return (
