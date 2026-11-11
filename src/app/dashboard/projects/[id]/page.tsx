@@ -46,10 +46,10 @@ export default async function ProjectPage({ params }: { params: { id: string } }
     .in("quote_id", quotes.map((q) => q.id))
     .order("created_at", { ascending: false })
     .limit(80);
-  const exports = (exData || []) as Ex[];
+  const exportRows = (exData || []) as Ex[];
   const links = new Map<string, string>();
   await Promise.all(
-    exports.map(async (e) => {
+    exportRows.map(async (e) => {
       const { data: s } = await supabase.storage.from("quote-exports").createSignedUrl(e.storage_path, 3600, { download: e.filename });
       if (s?.signedUrl) links.set(e.id, s.signedUrl);
     })
@@ -63,7 +63,7 @@ export default async function ProjectPage({ params }: { params: { id: string } }
   const title = cur.quote_name || `${cur.quote_ref || "(no ref)"} — ${cur.client_name || "No client"}`;
 
   const renderExports = (qid: string) => {
-    const mine = exports.filter((e) => e.quote_id === qid);
+    const mine = exportRows.filter((e) => e.quote_id === qid);
     if (mine.length === 0) return <div className="text-[11px] text-ink-soft mt-1">No PDF / Word exported yet.</div>;
     return (
       <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5">
