@@ -1953,6 +1953,22 @@ export default function QuoteBuilder({
     return out;
   }
 
+  // Items the AI gave no plan box for still get a "View on plan" link: their room's own sheet(s), whole page.
+  function fillMissingRegions(items: PlanItemResult[], pageRoom: Map<number, string>): PlanItemResult[] {
+    return items.map((it) => {
+      if (it.regions && it.regions.length > 0) return it;
+      const room = (it.room || "").trim().toLowerCase();
+      if (!room) return it;
+      const own = Array.from(pageRoom.entries())
+        .filter(([, r]) => r.trim().toLowerCase() === room)
+        .map(([pg]) => pg)
+        .sort((a, b) => a - b)
+        .slice(0, 3);
+      if (own.length === 0) return it;
+      return { ...it, regions: own.map((page) => ({ page, bbox: [0.03, 0.05, 0.97, 0.88] as [number, number, number, number] })) };
+    });
+  }
+
   // Keep an item's boxes only on sheets titled for its own room; if none are left, point at its own sheets.
   function filterRegionsByRoom(items: PlanItemResult[], pageRoom: Map<number, string>): PlanItemResult[] {
     if (pageRoom.size === 0) return items;
@@ -2418,6 +2434,9 @@ export default function QuoteBuilder({
         const inv = applyColumnInventory(merged, data.walls);
         tr("after column inventory", inv.items);
         data.items = addStandardDelivery(addRobeHangingRails(dedupeIntegratedAppliances(fixVanityWallCabinets(groupKitchenRooms(anchorRegions(flagMatchingBandLengths(inv.items), inv.report))))));
+        const noBoxBefore = data.items.filter((i: PlanItemResult) => !i.regions || i.regions.length === 0).length;
+        data.items = fillMissingRegions(data.items, pageRoom);
+        trace.push(`plan boxes: ${noBoxBefore} of ${data.items.length} items had no box from the read (now pointed at their room's sheet)`);
         tr("final list", data.items);
         trace.push(`walls: ${(data.walls || []).map((w: any) => `${w.room || "?"}/p${w.page}`).join(", ")}`);
         data.pipeline_trace = trace;
