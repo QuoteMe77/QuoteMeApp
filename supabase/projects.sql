@@ -1,7 +1,5 @@
 -- Project folders: one home per job for the quote, its revisions and its variations.
 -- Run once in the Supabase SQL editor. Safe to re-run. Does not delete anything.
-begin;
-
 create table if not exists projects (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references organizations(id) on delete cascade,
@@ -32,4 +30,3 @@ insert into projects (id, org_id, name, created_at)
   from quotes q
   where not exists (select 1 from projects p where p.id = q.project_id);
 
-commit;
