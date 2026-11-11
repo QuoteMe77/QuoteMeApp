@@ -69,7 +69,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="min-h-screen">
       <header className="border-b border-line-strong bg-paper px-5 py-3 flex items-center gap-4">
-        <h1 className="font-display text-lg font-semibold">QuoteMe</h1>
+        <h1 className="font-display text-lg font-semibold">
+          <Link href="/dashboard" className="hover:text-brass-deep" title="Back to My projects">
+            QuoteMe
+          </Link>
+        </h1>
         <Link href="/dashboard" className="text-sm font-medium text-brass-deep hover:underline">
           My quotes
         </Link>
