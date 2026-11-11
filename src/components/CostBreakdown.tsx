@@ -80,7 +80,7 @@ export default function CostBreakdown({
             <div>
               <div className="font-semibold text-ink-soft border-b border-line pb-1 mb-1">By room — what the price allows for each department</div>
               <div className="overflow-x-auto">
-                <table className="w-full text-xs">
+                <table className="w-full text-sm">
                   <thead>
                     <tr className="text-ink-soft">
                       <th className="text-left font-semibold py-1 pr-2">Room</th>
@@ -112,7 +112,7 @@ export default function CostBreakdown({
             {view.missing.length > 0 && (
               <details>
                 <summary className="cursor-pointer text-ink-soft">{view.missing.length} line(s) with no department split yet</summary>
-                <ul className="mt-1 text-xs space-y-0.5">
+                <ul className="mt-1 text-sm space-y-0.5">
                   {view.missing.map((m, i) => (
                     <li key={i} className="flex justify-between gap-3">
                       <span className="truncate">{m.area} — {m.name}</span>
@@ -122,7 +122,7 @@ export default function CostBreakdown({
                 </ul>
               </details>
             )}
-            <p className="text-xs text-ink-soft">POA items are excluded. Profit per room is the markup % on that room&apos;s cost.</p>
+            <p className="text-sm text-ink-soft">POA items are excluded. Profit per room is the markup % on that room&apos;s cost.</p>
           </div>
         </details>
       </section>

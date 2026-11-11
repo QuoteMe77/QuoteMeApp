@@ -35,8 +35,8 @@ export function StatusSelect({ id, kind, status }: { id: string; kind: "quote" |
         <option value={doneValue}>{doneLabel} ✓</option>
         <option value="declined">Declined</option>
       </select>
-      {locked && <span className="text-[11px] text-spruce">🔒 locked</span>}
-      {error && <span className="text-[11px] text-brick">{error}</span>}
+      {locked && <span className="text-sm text-spruce">🔒 locked</span>}
+      {error && <span className="text-sm text-brick">{error}</span>}
     </span>
   );
 }
@@ -104,7 +104,7 @@ export function ExportItem({
   const isPdf = format === "pdf";
   return (
     <div className="w-full">
-      <div className="text-[11px] text-ink-soft flex flex-wrap items-center gap-x-3">
+      <div className="text-sm text-ink-soft flex flex-wrap items-center gap-x-3">
         <span className="font-medium text-ink">{isPdf ? "PDF" : "Word"}</span>
         <span>
           {date} · ${total}

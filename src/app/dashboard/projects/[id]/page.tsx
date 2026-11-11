@@ -125,7 +125,7 @@ export default async function ProjectPage({ params }: { params: { id: string } }
 
   const renderExports = (qid: string) => {
     const mine = exportRows.filter((e) => e.quote_id === qid);
-    if (mine.length === 0) return <div className="text-[11px] text-ink-soft mt-1">No PDF / Word exported yet.</div>;
+    if (mine.length === 0) return <div className="text-sm text-ink-soft mt-1">No PDF / Word exported yet.</div>;
     return (
       <div className="mt-2 space-y-2">
         {mine.map((e) => (
@@ -156,16 +156,16 @@ export default async function ProjectPage({ params }: { params: { id: string } }
 
       <div className="grid grid-cols-3 gap-3 mb-6">
         <div className="bg-paper-raised border border-line-strong rounded-lg p-3">
-          <div className="text-[11px] uppercase tracking-wide text-ink-soft">Current quote</div>
+          <div className="text-sm uppercase tracking-wide text-ink-soft">Current quote</div>
           <div className="font-mono text-base">${money(Number(cur.total || 0))}</div>
         </div>
         <div className="bg-paper-raised border border-line-strong rounded-lg p-3">
-          <div className="text-[11px] uppercase tracking-wide text-ink-soft">Approved variations</div>
+          <div className="text-sm uppercase tracking-wide text-ink-soft">Approved variations</div>
           <div className="font-mono text-base">${money(approvedTotal)}</div>
-          {pendingVars.length > 0 && <div className="text-[11px] text-ink-soft">+ ${money(pendingTotal)} awaiting approval</div>}
+          {pendingVars.length > 0 && <div className="text-sm text-ink-soft">+ ${money(pendingTotal)} awaiting approval</div>}
         </div>
         <div className="bg-paper-raised border border-line-strong rounded-lg p-3">
-          <div className="text-[11px] uppercase tracking-wide text-ink-soft">Contract value (ex GST)</div>
+          <div className="text-sm uppercase tracking-wide text-ink-soft">Contract value (ex GST)</div>
           <div className="font-mono text-base font-semibold">${money(contract)}</div>
         </div>
       </div>
@@ -189,13 +189,13 @@ export default async function ProjectPage({ params }: { params: { id: string } }
                 <Link href={`/dashboard/quotes/${q.id}`} className="min-w-0 flex-1">
                   <div className="text-sm font-medium">
                     {mains.length > 1 ? `Rev ${revLetter(q.rev || 1)}` : "Quote"}
-                    {i === 0 && mains.length > 1 && <span className="ml-2 text-[11px] text-spruce">current</span>}
-                    <span className="ml-2 text-xs font-normal text-ink-soft">{q.quote_ref ? `Ref ${q.quote_ref}` : ""} · {dt(q.updated_at || q.created_at)}</span>
+                    {i === 0 && mains.length > 1 && <span className="ml-2 text-sm text-spruce">current</span>}
+                    <span className="ml-2 text-sm font-normal text-ink-soft">{q.quote_ref ? `Ref ${q.quote_ref}` : ""} · {dt(q.updated_at || q.created_at)}</span>
                   </div>
                 </Link>
                 <div className="font-mono text-sm">${money(Number(q.total || 0))}</div>
                 <StatusSelect id={q.id} kind="quote" status={q.status || "draft"} />
-                <Link href={`/dashboard/quotes/${q.id}`} className="text-xs underline text-brass-deep">
+                <Link href={`/dashboard/quotes/${q.id}`} className="text-sm underline text-brass-deep">
                   Open
                 </Link>
               </div>
@@ -222,7 +222,7 @@ export default async function ProjectPage({ params }: { params: { id: string } }
                   <Link href={`/dashboard/quotes/${v.id}`} className="min-w-0 flex-1">
                     <div className="text-sm font-medium">
                       Variation {v.variation_no}
-                      <span className="ml-2 text-xs font-normal text-ink-soft">
+                      <span className="ml-2 text-sm font-normal text-ink-soft">
                         {v.quote_ref ? `Ref ${v.quote_ref}` : ""} · {dt(v.updated_at || v.created_at)}
                         {v.status === "approved" && v.approved_at ? ` · approved ${dt(v.approved_at)}` : ""}
                       </span>
@@ -230,7 +230,7 @@ export default async function ProjectPage({ params }: { params: { id: string } }
                   </Link>
                   <div className="font-mono text-sm">${money(Number(v.total || 0))}</div>
                   <StatusSelect id={v.id} kind="variation" status={v.status || "draft"} />
-                  <Link href={`/dashboard/quotes/${v.id}`} className="text-xs underline text-brass-deep">
+                  <Link href={`/dashboard/quotes/${v.id}`} className="text-sm underline text-brass-deep">
                     Open
                   </Link>
                 </div>
@@ -253,7 +253,7 @@ export default async function ProjectPage({ params }: { params: { id: string } }
               <div key={pl.id} className="px-5 py-3 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-sm font-medium truncate">📐 {pl.filename}</div>
-                  <div className="text-xs text-ink-soft">
+                  <div className="text-sm text-ink-soft">
                     {dt(pl.created_at)}
                     {labelFor(pl.quote_id) ? ` · read for ${labelFor(pl.quote_id)}` : ""}
                     {pl.size_bytes ? ` · ${(Number(pl.size_bytes) / (1024 * 1024)).toFixed(1)} MB` : ""}
