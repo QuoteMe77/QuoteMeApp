@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { saveQuote, deleteQuoteAndRedirect, type QuoteItemInput, type QuoteMetaInput } from "@/app/dashboard/quotes/actions";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { buildQuotePdf } from "@/lib/exportPdf";
+import CostBreakdown from "@/components/CostBreakdown";
+import { computeCostBreakdown } from "@/lib/costBreakdown";
 import { buildQuoteDocx } from "@/lib/exportDocx";
 import { saveAs } from "file-saver";
 import { PDFDocument } from "pdf-lib";
@@ -520,15 +522,6 @@ type PriceBookItem = {
   cost_install?: number | null;
   cost_estimated?: boolean | null;
 };
-
-const COST_DEPTS: { key: "cost_material" | "cost_hardware" | "cost_factory" | "cost_drafting" | "cost_studio" | "cost_install"; label: string }[] = [
-  { key: "cost_material", label: "Material" },
-  { key: "cost_hardware", label: "Hardware" },
-  { key: "cost_factory", label: "Factory" },
-  { key: "cost_drafting", label: "Drafting" },
-  { key: "cost_studio", label: "Studio" },
-  { key: "cost_install", label: "Install" },
-];
 
 type QuoteRow = {
   id: string;
@@ -2914,43 +2907,15 @@ export default function QuoteBuilder({
   // Where the cost goes: each line's rate is split by its price book row's
   // department breakdown (scaled if the rate was edited). Lines with no
   // breakdown go to "Not broken down".
-  const profitView = useMemo(() => {
-    const byId = new Map(priceBook.map((p) => [p.id, p]));
-    const zero = () => {
-      const o: Record<string, number> = {};
-      COST_DEPTS.forEach((d) => (o[d.key] = 0));
-      return o;
-    };
-    const depts = zero();
-    let unallocated = 0;
-    let estimated = 0;
-    const missing: { name: string; area: string; cost: number }[] = [];
-    const rooms = new Map<string, { depts: Record<string, number>; unalloc: number; total: number }>();
-    for (const it of lineItems) {
-      if (it.poa) continue;
-      const lineCost = it.qty * it.rate;
-      const area = it.area || "General";
-      if (!rooms.has(area)) rooms.set(area, { depts: zero(), unalloc: 0, total: 0 });
-      const room = rooms.get(area)!;
-      room.total += lineCost;
-      const pb = it.price_book_item_id ? byId.get(it.price_book_item_id) : undefined;
-      const parts = pb ? COST_DEPTS.map((d) => Number(pb[d.key]) || 0) : [];
-      const sum = parts.reduce((a2, b2) => a2 + b2, 0);
-      if (!pb || sum <= 0) {
-        unallocated += lineCost;
-        room.unalloc += lineCost;
-        if (Math.abs(lineCost) > 0.005) missing.push({ name: it.pdf_label || it.name, area, cost: lineCost });
-        continue;
-      }
-      if (pb.cost_estimated) estimated += lineCost;
-      COST_DEPTS.forEach((d, i) => {
-        const part = lineCost * (parts[i] / sum);
-        depts[d.key] += part;
-        room.depts[d.key] += part;
-      });
-    }
-    return { depts, unallocated, estimated, missing, rooms: Array.from(rooms.entries()) };
-  }, [lineItems, priceBook]);
+  const profitView = useMemo(
+    () =>
+      computeCostBreakdown(
+        lineItems.map((it) => ({ price_book_item_id: it.price_book_item_id, name: it.pdf_label || it.name, area: it.area, qty: it.qty, rate: it.rate, poa: it.poa })),
+        priceBook,
+        Number(markupPct) || 0
+      ),
+    [lineItems, priceBook, markupPct]
+  );
 
   function addFromPriceBook(pb: PriceBookItem) {
     setLineItems((prev) => [
@@ -4382,113 +4347,7 @@ export default function QuoteBuilder({
       </section>
 
       {subtotal > 0 && (
-        <section className="mt-4 rounded-lg border border-line bg-paper-raised p-4">
-          <details>
-            <summary className="cursor-pointer font-semibold">
-              Profit &amp; cost breakdown — profit ${money(markupAmount)} ({total > 0 ? ((markupAmount / total) * 100).toFixed(1) : "0.0"}% of sell price)
-            </summary>
-            <div className="mt-3 text-sm space-y-4">
-              <p>
-                Sell price <b className="font-mono">${money(total)}</b> = cost <b className="font-mono">${money(subtotal)}</b> + your markup (profit){" "}
-                <b className="font-mono">${money(markupAmount)}</b>. The cost is what the price book allows, split into the departments below.
-              </p>
-
-              {(() => {
-                const known = Math.max(0, subtotal - profitView.unallocated - profitView.estimated);
-                const pct = (v: number) => (subtotal > 0 ? ((v / subtotal) * 100).toFixed(0) : "0");
-                return (
-                  <p className={profitView.unallocated > 0.005 ? "rounded bg-amber-50 border border-amber-300 px-3 py-2 text-amber-900" : "text-ink-soft"}>
-                    Department split: <b>{pct(known)}%</b> of the cost is from your spreadsheet, <b>{pct(profitView.estimated)}%</b> is estimated (rows your
-                    spreadsheet doesn&apos;t list — labour copied from the same cabinet type, material is what&apos;s left), and{" "}
-                    <b>{pct(profitView.unallocated)}%</b> has no split yet.
-                  </p>
-                );
-              })()}
-
-              <div>
-                <div className="font-semibold text-ink-soft border-b border-line pb-1 mb-1">Whole job — what the price allows for each department</div>
-                <div className="grid grid-cols-[1fr_auto_4rem] gap-x-4 gap-y-0.5">
-                  {COST_DEPTS.map((d) => (
-                    <div key={d.key} className="contents">
-                      <span>{d.label}</span>
-                      <span className="text-right font-mono">${money(profitView.depts[d.key])}</span>
-                      <span className="text-right font-mono text-ink-soft">{subtotal > 0 ? ((profitView.depts[d.key] / subtotal) * 100).toFixed(1) : "0.0"}%</span>
-                    </div>
-                  ))}
-                  {profitView.unallocated > 0.005 && (
-                    <div className="contents text-ink-soft">
-                      <span>No split yet</span>
-                      <span className="text-right font-mono">${money(profitView.unallocated)}</span>
-                      <span className="text-right font-mono">{((profitView.unallocated / subtotal) * 100).toFixed(1)}%</span>
-                    </div>
-                  )}
-                  <div className="contents font-semibold">
-                    <span className="border-t border-line-strong pt-1">Total cost</span>
-                    <span className="text-right font-mono border-t border-line-strong pt-1">${money(subtotal)}</span>
-                    <span className="border-t border-line-strong pt-1" />
-                  </div>
-                  <div className="contents">
-                    <span>+ Markup (profit)</span>
-                    <span className="text-right font-mono">${money(markupAmount)}</span>
-                    <span />
-                  </div>
-                  <div className="contents font-semibold">
-                    <span>Sell price (ex GST)</span>
-                    <span className="text-right font-mono">${money(total)}</span>
-                    <span />
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <div className="font-semibold text-ink-soft border-b border-line pb-1 mb-1">By room — what the price allows for each department</div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-ink-soft">
-                        <th className="text-left font-semibold py-1 pr-2">Room</th>
-                        {COST_DEPTS.map((d) => (
-                          <th key={d.key} className="text-right font-semibold px-2">{d.label}</th>
-                        ))}
-                        <th className="text-right font-semibold px-2">No split</th>
-                        <th className="text-right font-semibold px-2">Cost</th>
-                        <th className="text-right font-semibold pl-2">Profit</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {profitView.rooms.map(([a, r]) => (
-                        <tr key={a} className="border-t border-line">
-                          <td className="py-1 pr-2">{a}</td>
-                          {COST_DEPTS.map((d) => (
-                            <td key={d.key} className="text-right font-mono px-2">${money(r.depts[d.key])}</td>
-                          ))}
-                          <td className="text-right font-mono px-2 text-ink-soft">{r.unalloc > 0.005 ? `$${money(r.unalloc)}` : "–"}</td>
-                          <td className="text-right font-mono px-2 font-semibold">${money(r.total)}</td>
-                          <td className="text-right font-mono pl-2">${money(r.total * (markupPct / 100))}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {profitView.missing.length > 0 && (
-                <details>
-                  <summary className="cursor-pointer text-ink-soft">{profitView.missing.length} line(s) with no department split yet</summary>
-                  <ul className="mt-1 text-xs space-y-0.5">
-                    {profitView.missing.map((m, i) => (
-                      <li key={i} className="flex justify-between gap-3">
-                        <span className="truncate">{m.area} — {m.name}</span>
-                        <span className="font-mono shrink-0">${money(m.cost)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-              <p className="text-xs text-ink-soft">POA items are excluded. Profit per room is the markup % on that room&apos;s cost.</p>
-            </div>
-          </details>
-        </section>
+        <CostBreakdown view={profitView} subtotal={subtotal} markupAmount={markupAmount} total={total} />
       )}
 
       {namingOpen && (

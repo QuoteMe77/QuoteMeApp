@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import CostBreakdown from "@/components/CostBreakdown";
+import { computeCostBreakdown, mergeCostViews, type CostItem } from "@/lib/costBreakdown";
+import { loadPriceBook } from "@/lib/loadPriceBook";
 import { NewRevisionButton, NewVariationButton, StatusSelect } from "./ProjectControls";
 
 type Q = {
@@ -11,6 +14,7 @@ type Q = {
   status?: string | null;
   approved_at?: string | null;
   total?: number | string | null;
+  markup_pct?: number | string | null;
   quote_name?: string | null;
   quote_ref?: string | null;
   client_name?: string | null;
@@ -81,6 +85,33 @@ export default async function ProjectPage({ params }: { params: { id: string } }
   const approvedTotal = approvedVars.reduce((s, v) => s + Number(v.total || 0), 0);
   const pendingTotal = pendingVars.reduce((s, v) => s + Number(v.total || 0), 0);
   const contract = Number(cur.total || 0) + approvedTotal;
+  // Cost by department for the whole job: the current quote plus approved variations.
+  const contractDocs = [cur, ...approvedVars];
+  const { data: itemRows } = await supabase.from("quote_items").select("*").in("quote_id", contractDocs.map((d) => d.id));
+  const priceBook = await loadPriceBook(supabase);
+  const itemsFor = (qid: string): CostItem[] =>
+    ((itemRows || []) as any[])
+      .filter((r) => r.quote_id === qid)
+      .map((r) => ({
+        price_book_item_id: r.price_book_item_id,
+        name: r.pdf_label || r.name,
+        area: r.area || "General",
+        qty: Number(r.qty),
+        rate: Number(r.rate),
+        poa: !!r.poa,
+      }));
+  let jobCost = 0;
+  let jobMarkup = 0;
+  const jobViews = contractDocs.map((d) => {
+    const items = itemsFor(d.id);
+    const markup = Number(d.markup_pct) || 0;
+    const cost = items.reduce((sum, it) => (it.poa ? sum : sum + it.qty * it.rate), 0);
+    jobCost += cost;
+    jobMarkup += cost * (markup / 100);
+    const prefix = d.kind === "variation" ? `Variation ${d.variation_no} — ` : "";
+    return computeCostBreakdown(items, priceBook, markup, prefix);
+  });
+  const jobView = mergeCostViews(jobViews);
   const title = cur.quote_name || `${cur.quote_ref || "(no ref)"} — ${cur.client_name || "No client"}`;
 
   const renderExports = (qid: string) => {
@@ -131,6 +162,13 @@ export default async function ProjectPage({ params }: { params: { id: string } }
           <div className="font-mono text-base font-semibold">${money(contract)}</div>
         </div>
       </div>
+
+      {jobCost > 0 && (
+        <div className="mb-6">
+          <CostBreakdown view={jobView} subtotal={jobCost} markupAmount={jobMarkup} total={jobCost + jobMarkup} title="Job cost breakdown" open />
+          <p className="text-xs text-ink-soft mt-1">Covers the current quote and approved variations (ex GST).</p>
+        </div>
+      )}
 
       <section className="mb-6">
         <div className="flex items-center justify-between mb-2">
