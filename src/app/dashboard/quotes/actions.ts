@@ -169,14 +169,22 @@ export async function deleteQuoteAndRedirect(quoteId: string) {
 // ---------------------------------------------------------------------------
 // Project folders: revisions, variations, status.
 // ---------------------------------------------------------------------------
-async function authOrg() {
+type AuthOk = {
+  error?: undefined;
+  supabase: ReturnType<typeof createClient>;
+  user: { id: string };
+  orgId: string;
+};
+type AuthFail = { error: string };
+
+async function authOrg(): Promise<AuthOk | AuthFail> {
   const supabase = createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return { error: "Not signed in." as const };
+  if (!user) return { error: "Not signed in." };
   const { data: profile } = await supabase.from("profiles").select("org_id").eq("id", user.id).single();
-  if (!profile) return { error: "No organization found for this user." as const };
+  if (!profile) return { error: "No organization found for this user." };
   return { supabase, user, orgId: profile.org_id as string };
 }
 
@@ -185,7 +193,7 @@ const SETUP_MSG = "Project folders need projects.sql to be run in Supabase first
 // Copies the project's current quote into a new revision (Rev B, C…), same items, ready to edit.
 export async function createRevision(quoteId: string): Promise<{ id: string } | { error: string }> {
   const a = await authOrg();
-  if ("error" in a) return { error: a.error };
+  if (a.error !== undefined) return { error: a.error };
   const { supabase, user, orgId } = a;
   const { data: src } = await supabase.from("quotes").select("*").eq("id", quoteId).eq("org_id", orgId).single();
   if (!src || !("project_id" in src) || !src.project_id) return { error: SETUP_MSG };
@@ -217,7 +225,7 @@ export async function createRevision(quoteId: string): Promise<{ id: string } | 
 // Starts an empty variation (V1, V2…) carrying the client, site and markup from the project's current quote.
 export async function createVariation(projectId: string): Promise<{ id: string } | { error: string }> {
   const a = await authOrg();
-  if ("error" in a) return { error: a.error };
+  if (a.error !== undefined) return { error: a.error };
   const { supabase, user, orgId } = a;
   const { data: all } = await supabase.from("quotes").select("*").eq("project_id", projectId).eq("org_id", orgId);
   if (!all || all.length === 0) return { error: SETUP_MSG };
@@ -257,7 +265,7 @@ export async function setQuoteStatus(quoteId: string, status: string): Promise<{
   const allowed = ["draft", "sent", "accepted", "approved", "declined"];
   if (!allowed.includes(status)) return { error: "Unknown status." };
   const a = await authOrg();
-  if ("error" in a) return { error: a.error };
+  if (a.error !== undefined) return { error: a.error };
   const { supabase, orgId } = a;
   const done = status === "accepted" || status === "approved";
   const { data, error } = await supabase
@@ -275,7 +283,7 @@ export async function setQuoteStatus(quoteId: string, status: string): Promise<{
 
 export async function deleteProject(projectId: string): Promise<{ ok: true } | { error: string }> {
   const a = await authOrg();
-  if ("error" in a) return { error: a.error };
+  if (a.error !== undefined) return { error: a.error };
   const { supabase, orgId } = a;
   const { error } = await supabase.from("projects").delete().eq("id", projectId).eq("org_id", orgId);
   if (error) return { error: error.message };
