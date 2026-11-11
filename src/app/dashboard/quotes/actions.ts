@@ -18,6 +18,8 @@ export type QuoteItemInput = {
   pdf_label: string;
   poa: boolean;
   flag_label: string;
+  plan_id?: string | null;
+  regions?: { page: number; bbox: [number, number, number, number] }[] | null;
   sort_order: number;
 };
 
@@ -134,8 +136,19 @@ export async function saveQuote(
       poa: item.poa,
       flag_label: item.flag_label,
       sort_order: index,
+      plan_id: item.plan_id ?? null,
+      regions: item.regions ?? null,
     }));
-    const { error: itemsErr } = await supabase.from("quote_items").insert(rows);
+    let { error: itemsErr } = await supabase.from("quote_items").insert(rows);
+    // plan_id / regions need plans.sql; until it has been run, save without them.
+    if (itemsErr && /plan_id|regions/i.test(itemsErr.message)) {
+      const plain = rows.map((r) => {
+        const { plan_id: _p, regions: _r, ...rest } = r;
+        void _p; void _r;
+        return rest;
+      });
+      ({ error: itemsErr } = await supabase.from("quote_items").insert(plain));
+    }
     if (itemsErr) return { error: itemsErr.message };
   }
 

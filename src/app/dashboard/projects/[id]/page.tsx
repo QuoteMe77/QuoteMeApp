@@ -55,6 +55,27 @@ export default async function ProjectPage({ params }: { params: { id: string } }
     })
   );
 
+  // Plans kept for this project (needs plans.sql; shows nothing until it has been run).
+  const { data: planData } = await supabase
+    .from("project_plans")
+    .select("id, quote_id, filename, storage_path, size_bytes, created_at")
+    .eq("project_id", params.id)
+    .order("created_at", { ascending: false });
+  type Pl = { id: string; quote_id: string | null; filename: string; storage_path: string; size_bytes: number | null; created_at: string };
+  const plans = (planData || []) as Pl[];
+  const planLinks = new Map<string, string>();
+  await Promise.all(
+    plans.map(async (pl) => {
+      const { data: s } = await supabase.storage.from("project-plans").createSignedUrl(pl.storage_path, 3600, { download: pl.filename });
+      if (s?.signedUrl) planLinks.set(pl.id, s.signedUrl);
+    })
+  );
+  const labelFor = (qid: string | null) => {
+    const q = quotes.find((x) => x.id === qid);
+    if (!q) return "";
+    return q.kind === "variation" ? `Variation ${q.variation_no}` : (q.rev || 1) > 1 ? `Quote Rev ${revLetter(q.rev || 1)}` : "Quote";
+  };
+
   const approvedVars = vars.filter((v) => v.status === "approved");
   const pendingVars = vars.filter((v) => v.status !== "approved" && v.status !== "declined");
   const approvedTotal = approvedVars.reduce((s, v) => s + Number(v.total || 0), 0);
@@ -177,9 +198,31 @@ export default async function ProjectPage({ params }: { params: { id: string } }
 
       <section>
         <h3 className="font-semibold text-sm mb-2">Drawings</h3>
-        <div className="bg-paper-raised border border-line-strong rounded-lg p-5 text-sm text-ink-soft">
-          Drawing storage for this project is coming next — the plans each quote or variation was priced from will be kept here.
-        </div>
+        {plans.length === 0 ? (
+          <div className="bg-paper-raised border border-line-strong rounded-lg p-5 text-sm text-ink-soft">
+            No drawings kept yet. When you read a plan and save the quote, the plan is stored here, and each quote line can show where it was read from.
+          </div>
+        ) : (
+          <div className="bg-paper-raised border border-line-strong rounded-lg divide-y divide-line">
+            {plans.map((pl) => (
+              <div key={pl.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium truncate">📐 {pl.filename}</div>
+                  <div className="text-xs text-ink-soft">
+                    {dt(pl.created_at)}
+                    {labelFor(pl.quote_id) ? ` · read for ${labelFor(pl.quote_id)}` : ""}
+                    {pl.size_bytes ? ` · ${(Number(pl.size_bytes) / (1024 * 1024)).toFixed(1)} MB` : ""}
+                  </div>
+                </div>
+                {planLinks.get(pl.id) && (
+                  <a href={planLinks.get(pl.id)} className="text-xs underline text-brass-deep shrink-0">
+                    Download
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );

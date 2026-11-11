@@ -559,6 +559,8 @@ type QuoteItemRow = {
   pdf_label: string | null;
   poa: boolean;
   flag_label: string | null;
+  plan_id?: string | null;
+  regions?: { page: number; bbox: [number, number, number, number] }[] | null;
 };
 
 type LineItem = {
@@ -575,6 +577,8 @@ type LineItem = {
   pdf_label: string;
   poa: boolean;
   flag_label: string;
+  plan_id?: string | null; // the plan file this line was read from (kept in the project)
+  regions?: { page: number; bbox: [number, number, number, number] }[] | null;
 };
 
 // Drawings nominate drawers by short code ("MER"); the quote should read the full brand name.
@@ -648,6 +652,8 @@ export default function QuoteBuilder({
       pdf_label: it.pdf_label || "",
       poa: it.poa,
       flag_label: it.flag_label || "",
+      plan_id: it.plan_id ?? null,
+      regions: Array.isArray(it.regions) && it.regions.length > 0 ? it.regions : null,
     }))
   );
 
@@ -720,7 +726,12 @@ export default function QuoteBuilder({
     loading: boolean;
     error: string | null;
     suspect: boolean;
+    file?: File | null;
   } | null>(null);
+  // Plan files by id (this session's reads, plus saved plans fetched back from storage).
+  const planFilesRef = useRef<Map<string, File>>(new Map());
+  const storedPlanIds = useRef<Set<string>>(new Set());
+  const planIdRef = useRef<string | null>(null);
   // "View all on plan": every item's box drawn together, one image per page,
   // with a numbered legend — one click instead of opening items one by one.
   const [overview, setOverview] = useState<{
@@ -1107,8 +1118,14 @@ export default function QuoteBuilder({
     return bbox[1] - median > 0.12;
   }
 
-  async function showRegionAt(itemName: string, regions: { page: number; bbox: [number, number, number, number] }[], index: number) {
-    if (!lastPlanFile) {
+  async function showRegionAt(
+    itemName: string,
+    regions: { page: number; bbox: [number, number, number, number] }[],
+    index: number,
+    fileOverride?: File | null
+  ) {
+    const planFile = fileOverride ?? lastPlanFile;
+    if (!planFile) {
       setRegionPreview({
         itemName,
         regions,
@@ -1121,9 +1138,9 @@ export default function QuoteBuilder({
       return;
     }
     const suspect = isRegionSuspect(regions[index].page, regions[index].bbox);
-    setRegionPreview({ itemName, regions, index, imageUrl: null, loading: true, error: null, suspect });
+    setRegionPreview({ itemName, regions, index, imageUrl: null, loading: true, error: null, suspect, file: planFile });
     try {
-      const url = await renderPlanRegionPreview(lastPlanFile, regions[index].page, regions[index].bbox);
+      const url = await renderPlanRegionPreview(planFile, regions[index].page, regions[index].bbox);
       setRegionPreview((prev) => (prev ? { ...prev, imageUrl: url, loading: false } : prev));
     } catch (err) {
       setRegionPreview((prev) =>
@@ -1144,7 +1161,7 @@ export default function QuoteBuilder({
       if (!prev) return prev;
       const nextIndex = Math.max(0, Math.min(prev.regions.length - 1, prev.index + delta));
       if (nextIndex === prev.index) return prev;
-      showRegionAt(prev.itemName, prev.regions, nextIndex);
+      showRegionAt(prev.itemName, prev.regions, nextIndex, prev.file);
       return { ...prev, index: nextIndex, loading: true, imageUrl: null };
     });
   }
@@ -2257,6 +2274,11 @@ export default function QuoteBuilder({
     // deletes its copy of the upload right after reading it, so this is the
     // only copy left once the read comes back.
     setLastPlanFile(planFile);
+    {
+      const pid = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      planIdRef.current = pid;
+      planFilesRef.current.set(pid, planFile);
+    }
 
     // Checked here, before anything is uploaded, because this is the one
     // call site every upload path goes through (direct or via the page
@@ -2757,6 +2779,7 @@ export default function QuoteBuilder({
 
     const newLines: LineItem[] = [];
     toAdd.forEach(({ it, i }) => {
+      const firstNew = newLines.length;
       const noPrice = isNoPriceScopeItem(it);
       const chosenId = planItemMaterial[i];
       const chosen = !noPrice && chosenId ? priceBook.find((p) => p.id === chosenId) : null;
@@ -2831,6 +2854,10 @@ export default function QuoteBuilder({
             flag_label: ptoHardware ? "" : "Select drawer hardware",
           });
         }
+      }
+      for (let k = firstNew; k < newLines.length; k++) {
+        newLines[k].plan_id = planIdRef.current;
+        newLines[k].regions = it.regions && it.regions.length > 0 ? it.regions : null;
       }
     });
 
@@ -3000,6 +3027,8 @@ export default function QuoteBuilder({
       pdf_label: it.pdf_label,
       poa: it.poa,
       flag_label: it.flag_label,
+      plan_id: it.plan_id ?? null,
+      regions: it.regions ?? null,
       sort_order: index,
     }));
 
@@ -3009,6 +3038,7 @@ export default function QuoteBuilder({
         setSaveError(result.error);
         return;
       }
+      await storePlans(result.id);
       setSavedNotice(true);
       if (!quote?.id) {
         router.push(`/dashboard/quotes/${result.id}`);
@@ -3016,6 +3046,92 @@ export default function QuoteBuilder({
         router.refresh();
       }
     });
+  }
+
+  // Keeps every plan this quote's lines were read from in the project (needs plans.sql run once).
+  async function storePlans(quoteId: string) {
+    const ids = Array.from(new Set(lineItems.map((l) => l.plan_id).filter((x): x is string => !!x)));
+    const pending = ids.filter((id) => planFilesRef.current.has(id) && !storedPlanIds.current.has(id));
+    if (pending.length === 0) return;
+    try {
+      const supabase = createBrowserClient();
+      const { data: u } = await supabase.auth.getUser();
+      const { data: prof } = await supabase.from("profiles").select("org_id").eq("id", u.user?.id || "").single();
+      const orgId = (prof as { org_id?: string } | null)?.org_id;
+      const { data: qrow } = await supabase.from("quotes").select("project_id").eq("id", quoteId).single();
+      const projectId = (qrow as { project_id?: string | null } | null)?.project_id;
+      if (!orgId || !projectId) return;
+      for (const id of pending) {
+        const file = planFilesRef.current.get(id)!;
+        const path = `${orgId}/${projectId}/${id}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+        const up = await supabase.storage.from("project-plans").upload(path, file, { contentType: file.type || undefined, upsert: true });
+        if (up.error) throw up.error;
+        const ins = await supabase
+          .from("project_plans")
+          .insert({ id, org_id: orgId, project_id: projectId, quote_id: quoteId, filename: file.name, storage_path: path, size_bytes: file.size });
+        if (ins.error) throw ins.error;
+        storedPlanIds.current.add(id);
+      }
+    } catch (err) {
+      setSaveError(`Saved, but the plan file couldn't be kept in the project (${err instanceof Error ? err.message : "storage error"}).`);
+    }
+  }
+
+  // Gets a plan file back: this session's copy, or the one kept in the project.
+  async function getPlanFile(planId: string): Promise<File | null> {
+    const have = planFilesRef.current.get(planId);
+    if (have) return have;
+    try {
+      const supabase = createBrowserClient();
+      const { data: row } = await supabase.from("project_plans").select("filename, storage_path").eq("id", planId).single();
+      const r = row as { filename: string; storage_path: string } | null;
+      if (!r) return null;
+      const dl = await supabase.storage.from("project-plans").download(r.storage_path);
+      if (dl.error || !dl.data) return null;
+      const file = new File([dl.data], r.filename, { type: dl.data.type || (/\.pdf$/i.test(r.filename) ? "application/pdf" : "") });
+      planFilesRef.current.set(planId, file);
+      storedPlanIds.current.add(planId);
+      return file;
+    } catch {
+      return null;
+    }
+  }
+
+  // "View on plan" from a quote line: opens the kept plan with the line's box drawn on it.
+  async function viewLineOnPlan(it: LineItem) {
+    if (!it.regions || it.regions.length === 0 || !it.plan_id) return;
+    const regions = it.regions;
+    setRegionPreview({ itemName: it.pdf_label || it.name, regions, index: 0, imageUrl: null, loading: true, error: null, suspect: false, file: null });
+    const file = await getPlanFile(it.plan_id);
+    if (!file) {
+      setRegionPreview((prev) => (prev ? { ...prev, loading: false, error: "The plan file for this line couldn't be found in the project." } : prev));
+      return;
+    }
+    await showRegionAt(it.pdf_label || it.name, regions, 0, file);
+  }
+
+  // Every plan kept for this project, so the whole drawing set can be opened (any page, zoom).
+  const [projectPlans, setProjectPlans] = useState<{ id: string; filename: string; created_at: string }[] | null>(null);
+  async function openProjectPlans() {
+    if (!quote?.project_id) return;
+    const supabase = createBrowserClient();
+    const { data } = await supabase
+      .from("project_plans")
+      .select("id, filename, created_at")
+      .eq("project_id", quote.project_id)
+      .order("created_at", { ascending: false });
+    const list = (data as { id: string; filename: string; created_at: string }[]) || [];
+    if (list.length === 1) {
+      const f = await getPlanFile(list[0].id);
+      if (f) void showDocPage(f, list[0].filename, 1);
+      return;
+    }
+    setProjectPlans(list);
+  }
+  async function openPlanFromList(pl: { id: string; filename: string }) {
+    const f = await getPlanFile(pl.id);
+    setProjectPlans(null);
+    if (f) void showDocPage(f, pl.filename, 1);
   }
 
   const isVariation = quote?.kind === "variation";
@@ -3193,6 +3309,8 @@ export default function QuoteBuilder({
     setPlanItemFlag({});
     setScheduleFileName(null);
     setLastPlanFile(null);
+    planIdRef.current = null;
+    planIdRef.current = null;
     setRegionPreview(null);
     setOverview(null);
     setPlanError(null);
@@ -3242,6 +3360,15 @@ export default function QuoteBuilder({
           >
             Export Word
           </button>
+          {quote?.project_id && (
+            <button
+              onClick={() => void openProjectPlans()}
+              className="text-xs border border-line-strong rounded-md px-3 py-1.5 hover:bg-paper"
+              title="Open the plans kept for this project"
+            >
+              📐 Plans
+            </button>
+          )}
           {quote && (
             <button
               onClick={handleDelete}
@@ -4019,6 +4146,31 @@ export default function QuoteBuilder({
         </div>
       )}
 
+      {projectPlans && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setProjectPlans(null)}>
+          <div className="bg-paper-raised rounded-lg p-5 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display font-semibold text-sm">Plans kept for this project</h3>
+              <button onClick={() => setProjectPlans(null)} className="text-ink-soft hover:text-ink text-lg leading-none">✕</button>
+            </div>
+            {projectPlans.length === 0 ? (
+              <p className="text-sm text-ink-soft">No plans have been kept yet. Plans are stored when you save a quote that was read from a plan.</p>
+            ) : (
+              <ul className="divide-y divide-line">
+                {projectPlans.map((pl) => (
+                  <li key={pl.id}>
+                    <button onClick={() => void openPlanFromList(pl)} className="w-full text-left py-2 text-sm hover:bg-paper">
+                      📐 {pl.filename}
+                      <span className="block text-xs text-ink-soft">{new Date(pl.created_at).toLocaleDateString()}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+
       {docViewer && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setDocViewer(null)}>
           <div className="bg-paper-raised rounded-lg p-4 max-w-6xl w-full max-h-[94vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
@@ -4160,6 +4312,7 @@ export default function QuoteBuilder({
                   markupPct={Number(markupPct) || 0}
                   onChange={(patch) => updateItem(it.key, patch)}
                   onRemove={() => removeItem(it.key)}
+                  onViewPlan={it.plan_id && it.regions && it.regions.length > 0 ? () => void viewLineOnPlan(it) : undefined}
                 />
               ))}
             </div>
@@ -4614,12 +4767,14 @@ function LineItemRow({
   markupPct,
   onChange,
   onRemove,
+  onViewPlan,
 }: {
   index: number;
   item: LineItem;
   markupPct: number;
   onChange: (patch: Partial<LineItem>) => void;
   onRemove: () => void;
+  onViewPlan?: () => void;
 }) {
   const [sellDraft, setSellDraft] = useState<string | null>(null);
   const sellRate = item.rate * (1 + markupPct / 100);
@@ -4638,6 +4793,11 @@ function LineItemRow({
           placeholder="Item name"
         />
         {showCategory && <p className="text-xs text-ink-soft mt-1">{item.category}</p>}
+        {onViewPlan && (
+          <button type="button" onClick={onViewPlan} className="text-xs text-brass hover:text-brass-deep underline underline-offset-2 mt-1">
+            📍 View on plan
+          </button>
+        )}
         {item.flag_label && <ReadNotes text={item.flag_label} />}
         <label className="block mt-1.5">
           <span className="block text-[10px] uppercase tracking-wide text-ink-soft">PDF wording</span>
