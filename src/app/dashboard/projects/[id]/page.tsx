@@ -68,10 +68,14 @@ export default async function ProjectPage({ params }: { params: { id: string } }
   type Pl = { id: string; quote_id: string | null; filename: string; storage_path: string; size_bytes: number | null; created_at: string };
   const plans = (planData || []) as Pl[];
   const planLinks = new Map<string, string>();
+  const planViewLinks = new Map<string, string>();
   await Promise.all(
     plans.map(async (pl) => {
       const { data: s } = await supabase.storage.from("project-plans").createSignedUrl(pl.storage_path, 3600, { download: pl.filename });
       if (s?.signedUrl) planLinks.set(pl.id, s.signedUrl);
+      // No "download" option, so the browser opens the PDF in a tab to look at.
+      const { data: v } = await supabase.storage.from("project-plans").createSignedUrl(pl.storage_path, 3600);
+      if (v?.signedUrl) planViewLinks.set(pl.id, v.signedUrl);
     })
   );
   const labelFor = (qid: string | null) => {
@@ -252,11 +256,18 @@ export default async function ProjectPage({ params }: { params: { id: string } }
                     {pl.size_bytes ? ` · ${(Number(pl.size_bytes) / (1024 * 1024)).toFixed(1)} MB` : ""}
                   </div>
                 </div>
-                {planLinks.get(pl.id) && (
-                  <a href={planLinks.get(pl.id)} className="text-xs underline text-brass-deep shrink-0">
-                    Download
-                  </a>
-                )}
+                <div className="flex items-center gap-4 shrink-0">
+                  {planViewLinks.get(pl.id) && (
+                    <a href={planViewLinks.get(pl.id)} target="_blank" rel="noopener noreferrer" className="text-sm font-medium underline text-brass-deep">
+                      View
+                    </a>
+                  )}
+                  {planLinks.get(pl.id) && (
+                    <a href={planLinks.get(pl.id)} className="text-xs underline text-ink-soft">
+                      Download
+                    </a>
+                  )}
+                </div>
               </div>
             ))}
           </div>
