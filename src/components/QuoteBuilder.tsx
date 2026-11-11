@@ -317,7 +317,9 @@ async function extractPageTitles(file: File): Promise<Map<number, string>> {
           .join(" ")
           .trim();
       }
-      if (text) titles.set(i, text);
+      // Title-block junk (revision tables, "Drawing Number", initials like "LC") is not a room name.
+      const junk = /drawing\s*number|issue:|\bscale\b|drawn by|\bsheet\b|\brevision\b|\bdate\b/i.test(text) || text.replace(/[^A-Za-z]/g, "").length < 4;
+      if (text && !junk) titles.set(i, text);
     }
   } catch {
     /* no titles — fall back to the AI's own page guesses */
@@ -2454,6 +2456,17 @@ export default function QuoteBuilder({
         data.items = fillMissingRegions(data.items, pageRoom);
         trace.push(`plan boxes: ${noBoxBefore} of ${data.items.length} items had no box from the read (now pointed at their room's sheet)`);
         tr("final list", data.items);
+        {
+          // Room names that are really plan tags ("DB", "LU", "ST"…) mean general/architectural sheets were read.
+          const names = Array.from(new Set<string>(data.items.map((i: PlanItemResult) => (i.room || "").trim()).filter(Boolean)));
+          const tags = names.filter((n) => n.replace(/[^A-Za-z]/g, "").length <= 3 || /drawing number|issue:/i.test(n));
+          if (names.length >= 4 && tags.length >= 3) {
+            data.consistency_warnings = [
+              ...(data.consistency_warnings || []),
+              `${tags.length} of ${names.length} "rooms" look like plan tags or title-block text (${tags.slice(0, 6).join(", ")}…), not real rooms. This usually means general sheets (master plans, ceiling, plumbing, stairs, lift) were read along with the joinery. Reset and read again with only the joinery drawing pages selected.`,
+            ];
+          }
+        }
         trace.push(`walls: ${(data.walls || []).map((w: any) => `${w.room || "?"}/p${w.page}`).join(", ")}`);
         data.pipeline_trace = trace;
         data.column_report = inv.report;
