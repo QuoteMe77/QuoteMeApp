@@ -2429,11 +2429,17 @@ export default function QuoteBuilder({
         if (pageTitles.size === 0 && pageTotal > 1) {
           data.consistency_warnings = [...(data.consistency_warnings || []), "Could not read the sheet titles from this PDF, so rooms were matched from the AI's own page guesses — check each room's lengths and drawers."];
         }
-        // Support trace: what each step did to the items of any room whose name contains WIR.
+        // Support trace: what each step did to every room's cabinet runs (length items).
         const trace: string[] = [...chunkTrace];
         const tr = (label: string, its: PlanItemResult[]) => {
-          const mine = its.filter((i) => /\bwir\b/i.test(i.room || ""));
-          trace.push(`${label}: ${mine.length ? mine.map((i) => `[${i.room}] ${i.name} ${i.qty}${i.unit}`).join("; ") : "(no WIR items)"}`);
+          const byRoom = new Map<string, string[]>();
+          for (const i of its) {
+            if (i.calc !== "LM") continue;
+            const k = i.room || "General";
+            byRoom.set(k, [...(byRoom.get(k) || []), `${i.name} ${i.qty}${i.unit}`]);
+          }
+          const txt = Array.from(byRoom.entries()).map(([room, list]) => `[${room}] ${list.join(", ")}`).join(" | ");
+          trace.push(`${label}: ${txt || "(no length items)"}`);
         };
         tr("after AI read + room tidy", reconciled.items);
         const pageRoom = roomsByPageTitle(reconciled.items, pageTitles);
