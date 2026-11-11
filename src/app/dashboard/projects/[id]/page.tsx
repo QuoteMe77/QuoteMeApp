@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import CostBreakdown from "@/components/CostBreakdown";
 import { computeCostBreakdown, mergeCostViews, type CostItem } from "@/lib/costBreakdown";
 import { loadPriceBook } from "@/lib/loadPriceBook";
-import { NewRevisionButton, NewVariationButton, StatusSelect } from "./ProjectControls";
+import { ExportItem, NewRevisionButton, NewVariationButton, StatusSelect } from "./ProjectControls";
 
 type Q = {
   id: string;
@@ -52,10 +52,15 @@ export default async function ProjectPage({ params }: { params: { id: string } }
     .limit(80);
   const exportRows = (exData || []) as Ex[];
   const links = new Map<string, string>();
+  const viewLinks = new Map<string, string>();
   await Promise.all(
     exportRows.map(async (e) => {
       const { data: s } = await supabase.storage.from("quote-exports").createSignedUrl(e.storage_path, 3600, { download: e.filename });
       if (s?.signedUrl) links.set(e.id, s.signedUrl);
+      if (e.format === "pdf") {
+        const { data: v } = await supabase.storage.from("quote-exports").createSignedUrl(e.storage_path, 3600);
+        if (v?.signedUrl) viewLinks.set(e.id, v.signedUrl);
+      }
     })
   );
 
@@ -122,18 +127,16 @@ export default async function ProjectPage({ params }: { params: { id: string } }
     const mine = exportRows.filter((e) => e.quote_id === qid);
     if (mine.length === 0) return <div className="text-[11px] text-ink-soft mt-1">No PDF / Word exported yet.</div>;
     return (
-      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5">
+      <div className="mt-2 space-y-2">
         {mine.map((e) => (
-          <span key={e.id} className="text-[11px] text-ink-soft">
-            {links.get(e.id) ? (
-              <a href={links.get(e.id)} className="text-brass-deep underline">
-                {e.format === "pdf" ? "PDF" : "Word"}
-              </a>
-            ) : (
-              <span>{e.format === "pdf" ? "PDF" : "Word"}</span>
-            )}{" "}
-            {dt(e.created_at)} · ${money(Number(e.total))}
-          </span>
+          <ExportItem
+            key={e.id}
+            format={e.format}
+            date={dt(e.created_at)}
+            total={money(Number(e.total))}
+            viewUrl={viewLinks.get(e.id)}
+            downloadUrl={links.get(e.id)}
+          />
         ))}
       </div>
     );
