@@ -1,5 +1,4 @@
 import Link from "next/link";
-import Logo from "@/components/Logo";
 
 const FEATURES = [
   { icon: "📐", title: "Read your plans", text: "Upload the drawings and QuoteMe measures the cabinetry for you — then shows exactly where on the plan it found each item." },
@@ -9,35 +8,44 @@ const FEATURES = [
 
 export default function HomePage() {
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center px-6 py-14">
-      <div className="max-w-3xl w-full text-center">
-        <Logo size={64} className="mb-5" />
-        <h1 className="font-display text-3xl sm:text-4xl font-semibold text-ink mb-3">
-          Joinery quotes, done in minutes
-        </h1>
-        <p className="text-lg text-ink-soft mb-9 max-w-xl mx-auto">
-          Price up a job, read a plan, send a quote — built for joinery businesses.
-        </p>
-        <div className="flex flex-col sm:flex-row gap-3 justify-center mb-3">
-          <Link
-            href="/signup"
-            className="rounded-lg bg-brass hover:bg-brass-deep text-white px-8 py-4 text-lg font-semibold shadow-sm transition-colors"
-          >
-            Start free trial
-          </Link>
-          <Link
-            href="/login"
-            className="rounded-lg border-2 border-line-strong bg-paper-raised hover:border-brass px-8 py-4 text-lg font-semibold transition-colors"
-          >
-            Log in
-          </Link>
+    <main className="min-h-screen bg-white flex flex-col items-center px-4 sm:px-6 py-8 sm:py-12">
+      <div className="max-w-5xl w-full">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/brand/quoteme-hero.jpg"
+          alt="QuoteMe — joinery quoting solutions. More quotes. More opportunities."
+          className="w-full rounded-2xl shadow-md"
+        />
+        <div className="text-center mt-10">
+          <h1 className="text-3xl sm:text-4xl font-semibold mb-3" style={{ color: "#0B1B33" }}>
+            Joinery quotes, done in minutes
+          </h1>
+          <p className="text-lg text-ink-soft mb-8 max-w-xl mx-auto">
+            Price up a job, read a plan, send a quote — built for joinery businesses.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center mb-3">
+            <Link
+              href="/signup"
+              className="rounded-lg px-10 py-4 text-lg font-semibold text-white shadow-sm transition-opacity hover:opacity-90"
+              style={{ background: "#0B1B33" }}
+            >
+              Start free trial
+            </Link>
+            <Link
+              href="/login"
+              className="rounded-lg border-2 px-10 py-4 text-lg font-semibold transition-colors hover:bg-slate-50"
+              style={{ borderColor: "#1E9BE8", color: "#0B1B33" }}
+            >
+              Log in
+            </Link>
+          </div>
+          <p className="text-sm text-ink-soft mb-12">14 days free, no card required</p>
         </div>
-        <p className="text-sm text-ink-soft mb-14">14 days free, no card required</p>
         <div className="grid sm:grid-cols-3 gap-4 text-left">
           {FEATURES.map((f) => (
-            <div key={f.title} className="rounded-lg border border-line-strong bg-paper-raised p-5">
+            <div key={f.title} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="text-2xl mb-2">{f.icon}</div>
-              <div className="font-display text-lg font-semibold mb-1">{f.title}</div>
+              <div className="text-lg font-semibold mb-1" style={{ color: "#0B1B33" }}>{f.title}</div>
               <p className="text-sm text-ink-soft">{f.text}</p>
             </div>
           ))}
