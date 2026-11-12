@@ -327,6 +327,31 @@ async function extractPageTitles(file: File): Promise<Map<number, string>> {
   return titles;
 }
 
+// A plan view repeats the elevation's column widths, and a sub-dimension row (a column
+// split into smaller pieces) sits inside one column of the main row. Neither is another
+// wall, so both are dropped before the server counts lineal metres.
+function dropDuplicateViews(list: DimensionString[]): DimensionString[] {
+  const key = (d: DimensionString) => d.columns.map((c) => c.width).join(",");
+  return list.filter((d, i) => {
+    // plan copy (has a depth frame) of an elevation that carries the same columns
+    if (d.frame && list.some((o, j) => j !== i && !o.frame && key(o) === key(d))) return false;
+    // sub-dimension: spans (within a hair) exactly one column of another row on the same page
+    if (d.columns.length > 0) {
+      const x0 = d.columns[0].x0;
+      const x1 = d.columns[d.columns.length - 1].x1;
+      const inside = list.some(
+        (o, j) =>
+          j !== i &&
+          o.page === d.page &&
+          o.columns.length > d.columns.length &&
+          o.columns.some((c) => Math.abs(c.x0 - x0) < 0.006 && Math.abs(c.x1 - x1) < 0.006 && Math.abs(c.width - d.overall) < 2)
+      );
+      if (inside) return false;
+    }
+    return true;
+  });
+}
+
 // Pulls the printed dimension strings (column widths) out of the PDF's own
 // text layer, exactly and repeatably, so the AI never has to read tiny
 // numbers off a picture. Returns [] for scans/images with no text layer, in
@@ -394,7 +419,7 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
     }
     // Repeated copies of an elevation (e.g. a mirrored view on another page) are all
     // kept: the server pools the AI's votes across copies and counts the wall once.
-    const unique = out;
+    const unique = dropDuplicateViews(out);
     return {
       strings: unique,
       note: unique.length
