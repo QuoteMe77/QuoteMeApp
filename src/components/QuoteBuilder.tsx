@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { saveQuote, deleteQuoteAndRedirect, type QuoteItemInput, type QuoteMetaInput } from "@/app/dashboard/quotes/actions";
+import Logo from "@/components/Logo";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { buildQuotePdf } from "@/lib/exportPdf";
 import CostBreakdown from "@/components/CostBreakdown";
@@ -3508,15 +3509,7 @@ export default function QuoteBuilder({
 
       {!quote && lineItems.length === 0 && (
         <div className="mb-6 rounded-xl border border-line-strong bg-paper-raised px-6 py-7 text-center">
-          <div className="inline-flex items-center gap-3 mb-2">
-            <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
-              <rect x="2" y="2" width="40" height="40" rx="10" fill="#9c6b2f" />
-              <path d="M13 14h18v4H13zM13 20h12v4H13zM13 26h18v4H13z" fill="#fff" opacity="0.92" />
-              <circle cx="32" cy="29" r="5" fill="#fff" />
-              <path d="M30 29l1.6 1.6L34.4 27" stroke="#9c6b2f" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            <span className="font-display text-3xl font-semibold tracking-tight">QuoteMe</span>
-          </div>
+          <div className="mb-2"><Logo size={44} /></div>
           <p className="text-lg font-medium">Let&apos;s build your next joinery quote</p>
           <p className="text-sm text-ink-soft mt-1">
             Fill in the client details, upload the plans and let QuoteMe read them — or add items by hand. You&apos;ll review everything before it goes out.
