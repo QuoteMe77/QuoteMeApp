@@ -330,7 +330,14 @@ async function extractPageTitles(file: File): Promise<Map<number, string>> {
 // A plan view repeats the elevation's column widths, and a sub-dimension row (a column
 // split into smaller pieces) sits inside one column of the main row. Neither is another
 // wall, so both are dropped before the server counts lineal metres.
-function dropDuplicateViews(list: DimensionString[]): DimensionString[] {
+function dropDuplicateViews(list0: DimensionString[]): DimensionString[] {
+  type Tagged = DimensionString & { _tag?: string; _plan?: boolean };
+  // a plan sheet's rows go when the same job-room has elevation sheets with figures of their own
+  const list = list0.filter((d) => {
+    const t = d as Tagged;
+    if (!t._plan || !t._tag) return true;
+    return !list0.some((o) => !(o as Tagged)._plan && (o as Tagged)._tag === t._tag);
+  });
   const key = (d: DimensionString) => d.columns.map((c) => c.width).join(",");
   return list.filter((d, i) => {
     // plan copy (has a depth frame) of an elevation that carries the same columns
@@ -409,12 +416,34 @@ async function extractDimensionStrings(file: File): Promise<{ strings: Dimension
       let found = findDimensionStrings(words, i, viewport.width, viewport.height, sawComma ? 12 : 1);
       if (sawComma) found = dropNonFrontViews(words, found);
       if (words.some((w) => /\bLED\d*\b/i.test(w.str))) found.forEach((d) => (d.led = true));
+      if (!sawComma && found.length > 0) {
+        // Bench-height-only sheet: no printed figure of 1500mm+ other than the row widths themselves,
+        // and no tall/pantry/broom/linen/robe wording. Nothing on it can be tall or a wall cabinet.
+        const known = new Set<number>();
+        found.forEach((d) => {
+          known.add(d.overall);
+          d.columns.forEach((c) => known.add(c.width));
+        });
+        const pageText = (tc.items as unknown as { str?: string }[]).map((r) => r.str || "").join(" ");
+        const tallFigure = words.some((w) => /^\d+(\.\d+)?$/.test(w.str) && parseFloat(w.str) >= 1500 && parseFloat(w.str) <= 4000 && !known.has(parseFloat(w.str)));
+        const tallWords = /\b(TALL|PANTRY|BROOM|LINEN|ROBE|WARDROBE|OVERHEAD|WALL\s+CAB\w*|FRIDGE\s+INTEGRATION|INTEGRATED\s+FRIDGE)\b/i.test(pageText);
+        if (!tallFigure && !tallWords) found.forEach((d) => (d.baseOnly = true));
+      }
       if (sawComma) {
         found.forEach((d) => (d.keepEnds = true));
         // Archicad-style sheets print a height chain and labels that say exactly what each
         // elevation is made of — worked out here, no AI needed.
         analyseElevations(words, found, viewport.width, viewport.height);
       }
+      // Vicello-style sheets: "Page 1" of each job-room is the plan (spec panel + footprint), whose
+      // rows repeat or mangle the elevations' figures. Tag the strings so the plan's can be dropped.
+      const pageText2 = (tc.items as unknown as { str?: string }[]).map((r) => r.str || "").join(" ");
+      const tag = (pageText2.match(/\b\d{4,}\s*-\s*[A-Za-z][A-Za-z ]*?(?=\s+MOB\b|\s*$)/) || [""])[0].trim().toUpperCase();
+      const isPlanSheet = /Skirting height/i.test(pageText2) && /Benchtops?:/i.test(pageText2) && /\bPage\s*1\b/.test(pageText2);
+      found.forEach((d) => {
+        (d as DimensionString & { _tag?: string; _plan?: boolean })._tag = tag;
+        (d as DimensionString & { _tag?: string; _plan?: boolean })._plan = isPlanSheet;
+      });
       out.push(...found);
     }
     // Repeated copies of an elevation (e.g. a mirrored view on another page) are all
@@ -1925,7 +1954,26 @@ export default function QuoteBuilder({
       const pg = w.page || 1;
       // The sheet's own title block is the most reliable answer.
       const byTitle = pageRoom.get(pg);
+      if (byTitle && rooms.has(byTitle.trim())) {
+        w.room = byTitle;
+        return;
+      }
+      // The title block names a room none of the items use (e.g. "101189 - Media Unit" vs the
+      // sheet's own "Media Cabinet"): follow where the items for this page are actually drawn.
       if (byTitle) {
+        let bestRoom = "";
+        let bestN = 0;
+        rooms.forEach((m, room) => {
+          const n = m.get(pg) || 0;
+          if (n > bestN) {
+            bestN = n;
+            bestRoom = room;
+          }
+        });
+        if (bestRoom) {
+          w.room = bestRoom;
+          return;
+        }
         w.room = byTitle;
         return;
       }

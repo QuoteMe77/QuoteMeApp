@@ -36,6 +36,7 @@ export type DimensionString = {
   // Vertical extent of the elevation as fractions of the page height, with the
   // real-world height (mm) it represents — from the tall vertical dimension.
   frame?: { top: number; bottom: number; mm: number };
+  baseOnly?: boolean; // sheet shows nothing taller than bench height and no tall/pantry wording
   // Sheet style (Archicad etc.) where the small end figures are end panels that
   // belong to the cabinetry, so they count toward its length.
   keepEnds?: boolean;
@@ -101,6 +102,30 @@ export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: n
             }
           }
           if (sum > o.v + tol) break;
+        }
+      }
+      if (!hit) {
+        // Stacked figures (e.g. a 25 and a 16 printed one under the other) can leave the row a few mm
+        // short of the printed overall. Accept a long, centred run that falls short by under 45mm.
+        let nearBest = Infinity;
+        for (let i = 0; i < row.length; i++) {
+          let sum = 0;
+          for (let j = i; j < row.length; j++) {
+            sum += row[j].v;
+            if (sum > o.v) break;
+            if (j - i >= 5 && o.v - sum <= 45) {
+              const run = row.slice(i, j + 1);
+              const left = run[0].x, right = run[run.length - 1].x + run[run.length - 1].w;
+              if (o.xc >= left - 20 && o.xc <= right + 20) {
+                const d = Math.abs((left + right) / 2 - o.xc) + (o.v - sum) * 40;
+                if (d < nearBest) {
+                  nearBest = d;
+                  hit = run;
+                  hitSum = sum;
+                }
+              }
+            }
+          }
         }
       }
       if (hit) {

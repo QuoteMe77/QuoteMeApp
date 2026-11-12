@@ -195,7 +195,7 @@ export async function POST(request: NextRequest) {
   const schedulePath: unknown = body?.schedulePath;
   // Exact column widths read from the PDF's own text layer by the browser
   // (see lib/dimensionRows.ts). Empty for scans/images.
-  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string; upper?: number; detKind?: string }[]; frame?: { top: number; bottom: number; mm: number }; keepEnds?: boolean; led?: boolean; det?: { floor: number; k: number; bands: { kind: "base" | "wall" | "tall"; lo: number; hi: number }[]; printed?: { wall?: number } } };
+  type DimStr = { page: number; overall: number; columns: { width: number; x0: number; x1: number; label: string; upper?: number; detKind?: string }[]; frame?: { top: number; bottom: number; mm: number }; baseOnly?: boolean; keepEnds?: boolean; led?: boolean; det?: { floor: number; k: number; bands: { kind: "base" | "wall" | "tall"; lo: number; hi: number }[]; printed?: { wall?: number } } };
   const dimStrings: DimStr[] = Array.isArray(body?.dimensionStrings)
     ? (body.dimensionStrings as DimStr[]).filter(
         (d) =>
@@ -717,6 +717,8 @@ Return ONLY JSON: { "walls": [ { "index": 0, "columns": [ { "index": 0, "has_bas
         else if (vote.has_base_cabinets) kind = "base";
         else if (vote.has_wall_cabinets) kind = "wall";
         if (detKind) kind = detKind;
+        // Bench-height-only sheet (worked out from the drawing's own text): base, never tall/wall.
+        if (first.baseOnly && kind !== "gap") kind = "base";
         // Counts read straight from the printed text of this column (one copy only).
         const own = (c.label || "").toUpperCase();
         const tags = own.match(/'?[A-Z]'?\s+\d{3}\s+DEEP/g) || [];
