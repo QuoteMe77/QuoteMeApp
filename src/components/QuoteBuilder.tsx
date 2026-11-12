@@ -3482,6 +3482,7 @@ export default function QuoteBuilder({
               </button>
             </div>
           </details>
+          {(quote?.project_id || quote) && (
           <details className="relative">
             <summary className="list-none cursor-pointer text-sm border border-line-strong rounded-md px-3 py-2 hover:bg-paper select-none" title="More actions">⋯</summary>
             <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-line-strong bg-paper-raised shadow-md py-1">
@@ -3497,6 +3498,7 @@ export default function QuoteBuilder({
               )}
             </div>
           </details>
+          )}
           <button
             onClick={requestSave}
             disabled={isPending || isLocked}
