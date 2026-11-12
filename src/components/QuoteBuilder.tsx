@@ -3455,57 +3455,47 @@ export default function QuoteBuilder({
         </div>
         <div className="flex items-center gap-3">
           {savedNotice && (
-            <span className="text-xs text-spruce">
+            <span className="text-sm text-spruce">
               ✓ Saved —{" "}
               <a href="/dashboard" className="underline font-medium">
                 View my quotes
               </a>
             </span>
           )}
-          {saveError && <span className="text-xs text-brick">{saveError}</span>}
-          <button
-            onClick={handleStartNew}
-            className="text-xs border border-line-strong rounded-md px-3 py-1.5 hover:bg-paper"
-            title="Clear this quote and start a new one (doesn't delete anything already saved)"
-          >
-            ↻ Start new quote
-          </button>
-          <button
-            onClick={handleExportPdf}
-            disabled={lineItems.length === 0}
-            className="text-xs border border-line-strong rounded-md px-3 py-1.5 hover:bg-paper disabled:opacity-40"
-          >
-            Export PDF
-          </button>
-          <button
-            onClick={handleExportDocx}
-            disabled={lineItems.length === 0}
-            className="text-xs border border-line-strong rounded-md px-3 py-1.5 hover:bg-paper disabled:opacity-40"
-          >
-            Export Word
-          </button>
-          {quote?.project_id && (
-            <button
-              onClick={() => void openProjectPlans()}
-              className="text-xs border border-line-strong rounded-md px-3 py-1.5 hover:bg-paper"
-              title="Open the plans kept for this project"
-            >
-              📐 Plans
-            </button>
-          )}
-          {quote && (
-            <button
-              onClick={handleDelete}
-              disabled={isPending}
-              className="text-xs text-brick underline disabled:opacity-50"
-            >
-              Delete
-            </button>
-          )}
+          {saveError && <span className="text-sm text-brick">{saveError}</span>}
+          <details className="relative">
+            <summary className="list-none cursor-pointer text-sm border border-line-strong rounded-md px-3 py-2 hover:bg-paper select-none">Export ▾</summary>
+            <div className="absolute right-0 z-20 mt-1 w-44 rounded-md border border-line-strong bg-paper-raised shadow-md py-1">
+              <button onClick={handleExportPdf} disabled={lineItems.length === 0} className="block w-full text-left px-3 py-2 text-sm hover:bg-paper disabled:opacity-40">
+                PDF
+              </button>
+              <button onClick={handleExportDocx} disabled={lineItems.length === 0} className="block w-full text-left px-3 py-2 text-sm hover:bg-paper disabled:opacity-40">
+                Word
+              </button>
+            </div>
+          </details>
+          <details className="relative">
+            <summary className="list-none cursor-pointer text-sm border border-line-strong rounded-md px-3 py-2 hover:bg-paper select-none" title="More actions">⋯</summary>
+            <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-line-strong bg-paper-raised shadow-md py-1">
+              {quote?.project_id && (
+                <button onClick={() => void openProjectPlans()} className="block w-full text-left px-3 py-2 text-sm hover:bg-paper">
+                  📐 Plans for this project
+                </button>
+              )}
+              <button onClick={handleStartNew} className="block w-full text-left px-3 py-2 text-sm hover:bg-paper" title="Clear this quote and start a new one (doesn't delete anything already saved)">
+                ↻ Start new quote
+              </button>
+              {quote && (
+                <button onClick={handleDelete} disabled={isPending} className="block w-full text-left px-3 py-2 text-sm text-brick hover:bg-paper disabled:opacity-50">
+                  Delete this quote
+                </button>
+              )}
+            </div>
+          </details>
           <button
             onClick={requestSave}
             disabled={isPending || isLocked}
-            className="bg-brass hover:bg-brass-deep text-white rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50"
+            className="bg-brass hover:bg-brass-deep text-white rounded-md px-5 py-2 text-base font-semibold disabled:opacity-50"
           >
             {isPending ? "Saving…" : isVariation ? "Save variation" : "Save quote"}
           </button>
@@ -4041,7 +4031,7 @@ export default function QuoteBuilder({
                               className="text-xs text-brick mt-0.5 text-left"
                               onClick={() => setExpandedPlanItems((prev) => new Set(prev).add(i))}
                             >
-                              ⚠ {showMaterialPicker && !planItemMaterial[i] ? "pick a material · " : ""}needs a look — open to review
+                              ⚠ {showMaterialPicker && !planItemMaterial[i] ? "Pick a material · " : ""}Check this item
                             </button>
                           )}
                           {expandedPlanItems.has(i) && (
@@ -4623,6 +4613,22 @@ export default function QuoteBuilder({
         </section>
       )}
 
+      {lineItems.length > 0 && (
+        <div className="sticky bottom-0 z-10 mt-6 -mx-2 flex items-center justify-between gap-4 rounded-t-lg border border-line-strong bg-paper-raised px-5 py-3 shadow-[0_-2px_8px_rgba(0,0,0,0.08)]">
+          <div className="text-base">
+            <span className="text-ink-soft">{lineItems.length} items · Total </span>
+            <span className="font-mono font-semibold text-lg">${money(total)}</span>
+            <span className="text-ink-soft text-sm"> ex GST{hasPoaItems ? " (POA excluded)" : ""}</span>
+          </div>
+          <button
+            onClick={requestSave}
+            disabled={isPending || isLocked}
+            className="bg-brass hover:bg-brass-deep text-white rounded-md px-6 py-2.5 text-base font-semibold disabled:opacity-50"
+          >
+            {isPending ? "Saving…" : isVariation ? "Save variation" : "Save quote"}
+          </button>
+        </div>
+      )}
       <style jsx global>{`
         .input {
           width: 100%;
