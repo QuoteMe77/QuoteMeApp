@@ -3463,6 +3463,13 @@ export default function QuoteBuilder({
             </span>
           )}
           {saveError && <span className="text-sm text-brick">{saveError}</span>}
+          <button
+            onClick={handleStartNew}
+            className="text-sm border border-line-strong rounded-md px-3 py-2 hover:bg-paper"
+            title="Clear this quote and start a new one (doesn't delete anything already saved)"
+          >
+            ↻ Start new quote
+          </button>
           <details className="relative">
             <summary className="list-none cursor-pointer text-sm border border-line-strong rounded-md px-3 py-2 hover:bg-paper select-none">Export ▾</summary>
             <div className="absolute right-0 z-20 mt-1 w-44 rounded-md border border-line-strong bg-paper-raised shadow-md py-1">
@@ -3482,9 +3489,6 @@ export default function QuoteBuilder({
                   📐 Plans for this project
                 </button>
               )}
-              <button onClick={handleStartNew} className="block w-full text-left px-3 py-2 text-sm hover:bg-paper" title="Clear this quote and start a new one (doesn't delete anything already saved)">
-                ↻ Start new quote
-              </button>
               {quote && (
                 <button onClick={handleDelete} disabled={isPending} className="block w-full text-left px-3 py-2 text-sm text-brick hover:bg-paper disabled:opacity-50">
                   Delete this quote
@@ -3501,6 +3505,24 @@ export default function QuoteBuilder({
           </button>
         </div>
       </div>
+
+      {!quote && lineItems.length === 0 && (
+        <div className="mb-6 rounded-xl border border-line-strong bg-paper-raised px-6 py-7 text-center">
+          <div className="inline-flex items-center gap-3 mb-2">
+            <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
+              <rect x="2" y="2" width="40" height="40" rx="10" fill="#9c6b2f" />
+              <path d="M13 14h18v4H13zM13 20h12v4H13zM13 26h18v4H13z" fill="#fff" opacity="0.92" />
+              <circle cx="32" cy="29" r="5" fill="#fff" />
+              <path d="M30 29l1.6 1.6L34.4 27" stroke="#9c6b2f" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span className="font-display text-3xl font-semibold tracking-tight">QuoteMe</span>
+          </div>
+          <p className="text-lg font-medium">Let&apos;s build your next joinery quote</p>
+          <p className="text-sm text-ink-soft mt-1">
+            Fill in the client details, upload the plans and let QuoteMe read them — or add items by hand. You&apos;ll review everything before it goes out.
+          </p>
+        </div>
+      )}
 
       {isLocked && (
         <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">
@@ -3554,52 +3576,6 @@ export default function QuoteBuilder({
         </div>
       </section>
 
-      {/* Price book search */}
-      <section className="bg-paper-raised border border-line-strong rounded-lg p-5 mb-5">
-        <h3 className="font-display text-sm font-semibold mb-3 text-ink-soft uppercase tracking-wide">
-          Add items
-        </h3>
-        <div className="flex flex-wrap gap-3 mb-3">
-          <input
-            className="input flex-1 min-w-[200px]"
-            placeholder="Search your price book…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <input
-            className="input w-44 shrink-0"
-            placeholder="Room / area"
-            value={activeArea}
-            onChange={(e) => setActiveArea(e.target.value || "General")}
-          />
-          <button
-            onClick={addCustomItem}
-            className="whitespace-nowrap shrink-0 border border-line-strong rounded-md px-3 py-2 text-sm hover:bg-paper"
-          >
-            + Custom item
-          </button>
-        </div>
-        {searchResults.length > 0 && (
-          <div className="border border-line rounded-md divide-y divide-line max-h-72 overflow-y-auto">
-            {searchResults.map((pb) => (
-              <button
-                key={pb.id}
-                onClick={() => addFromPriceBook(pb)}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-paper flex items-center justify-between gap-3"
-              >
-                <span>
-                  <span className="font-medium">{pb.name}</span>
-                  <span className="text-ink-soft"> — {pb.category}</span>
-                </span>
-                <span className="font-mono text-xs whitespace-nowrap">
-                  ${money(Number(pb.rate))} / {pb.unit}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
-      </section>
-
       {/* Read a plan */}
       <section className="bg-paper-raised border border-line-strong rounded-lg p-5 mb-5">
         <h3 className="font-display text-sm font-semibold mb-3 text-ink-soft uppercase tracking-wide">
@@ -3610,8 +3586,8 @@ export default function QuoteBuilder({
             {planUploading ? (planProgress || "Reading plan…") : "Upload a plan (PNG, JPEG or PDF)"}
             <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" className="hidden" onChange={handlePlanUpload} disabled={planUploading} />
           </label>
-          <label className="inline-block border border-line rounded-md px-3 py-2 text-xs cursor-pointer hover:bg-paper text-ink-soft">
-            {scheduleFileName ? `Schedule: ${scheduleFileName}` : "+ Attach finishes/hardware schedule (optional)"}
+          <label className="inline-block border border-line-strong rounded-md px-3 py-2 text-sm cursor-pointer hover:bg-paper">
+            {scheduleFileName ? `Schedule: ${scheduleFileName}` : "Attach finishes / hardware schedule (optional)"}
             <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" className="hidden" onChange={handleScheduleUpload} disabled={planUploading} />
           </label>
           {scheduleFileName && scheduleFileRef.current && (
@@ -4394,6 +4370,51 @@ export default function QuoteBuilder({
         </div>
       )}
 
+      {/* Price book search */}
+      <section className="bg-paper-raised border border-line-strong rounded-lg p-5 mb-5">
+        <h3 className="font-display text-sm font-semibold mb-3 text-ink-soft uppercase tracking-wide">
+          Add items manually
+        </h3>
+        <p className="text-sm text-ink-soft mb-3">
+          No plans? Add your items by hand: search your price book, pick the room, and click an item to add it.
+          Already read a plan? Use this to add anything the reading missed.
+        </p>
+        <div className="flex flex-wrap gap-3 mb-3">
+          <input
+            className="input flex-1 min-w-[200px]"
+            placeholder="Search your price book…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <RoomPicker className="input w-52 shrink-0" value={activeArea} areas={areas} onChange={(v) => setActiveArea(v || "General")} />
+          <button
+            onClick={addCustomItem}
+            className="whitespace-nowrap shrink-0 border border-line-strong rounded-md px-3 py-2 text-sm hover:bg-paper"
+          >
+            + Custom item
+          </button>
+        </div>
+        {searchResults.length > 0 && (
+          <div className="border border-line rounded-md divide-y divide-line max-h-72 overflow-y-auto">
+            {searchResults.map((pb) => (
+              <button
+                key={pb.id}
+                onClick={() => addFromPriceBook(pb)}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-paper flex items-center justify-between gap-3"
+              >
+                <span>
+                  <span className="font-medium">{pb.name}</span>
+                  <span className="text-ink-soft"> — {pb.category}</span>
+                </span>
+                <span className="font-mono text-xs whitespace-nowrap">
+                  ${money(Number(pb.rate))} / {pb.unit}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* Ledger */}
       <section className="bg-paper-raised border border-line-strong rounded-lg p-5 mb-5">
         <h3 className="font-display text-sm font-semibold mb-3 text-ink-soft uppercase tracking-wide">
@@ -4833,6 +4854,68 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+const ROOM_PRESETS = [
+  "Kitchen",
+  "Butler's pantry",
+  "Pantry",
+  "Laundry",
+  "Mudroom",
+  "Entry",
+  "Bathroom",
+  "Ensuite",
+  "Powder room",
+  "Vanity",
+  "Master WIR",
+  "Walk-in robe",
+  "Bedroom",
+  "Study",
+  "Media unit",
+  "Living",
+  "Alfresco / outdoor",
+  "Garage",
+  "General",
+];
+
+// Room / area chooser: a drop-down of common rooms (plus any already used on this quote), with
+// "Other…" for anything else.
+function RoomPicker({ value, areas, onChange, className }: { value: string; areas: string[]; onChange: (v: string) => void; className?: string }) {
+  const [custom, setCustom] = useState(false);
+  const options = Array.from(new Set([...ROOM_PRESETS, ...areas.filter(Boolean), ...(value ? [value] : [])]));
+  if (custom) {
+    return (
+      <input
+        className={className}
+        autoFocus
+        placeholder="Type the room name"
+        value={value === "General" ? "" : value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={() => {
+          if (!value || value === "General") setCustom(false);
+        }}
+      />
+    );
+  }
+  return (
+    <select
+      className={className}
+      value={value || "General"}
+      onChange={(e) => {
+        if (e.target.value === "__other") {
+          setCustom(true);
+          onChange("");
+        } else onChange(e.target.value);
+      }}
+    >
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+      <option value="__other">Other…</option>
+    </select>
+  );
+}
+
 function LineItemRow({
   index,
   item,
@@ -4882,12 +4965,7 @@ function LineItemRow({
         </label>
         <label className="block mt-1.5">
           <span className="block text-[10px] uppercase tracking-wide text-ink-soft">Room</span>
-          <input
-            className="input text-xs mt-0.5"
-            list="quote-areas"
-            value={item.area}
-            onChange={(e) => onChange({ area: e.target.value || "General" })}
-          />
+          <RoomPicker className="input text-xs mt-0.5" value={item.area} areas={[]} onChange={(v) => onChange({ area: v || "General" })} />
         </label>
         <label className="block mt-1.5">
           <span className="block text-[10px] uppercase tracking-wide text-ink-soft">Note</span>
