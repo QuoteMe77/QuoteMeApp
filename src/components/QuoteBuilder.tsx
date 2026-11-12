@@ -359,6 +359,25 @@ function dropDuplicateViews(list0: DimensionString[]): DimensionString[] {
   });
 }
 
+// Title-block tag per page ("101189 - LAUNDRY"), "" when a page has none — used to keep a room's
+// sheets together when a big set is split into reads.
+async function extractJobRoomTags(file: File): Promise<string[]> {
+  try {
+    ensurePdfjsWorker();
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    const tags: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const tc = await (page as unknown as { getTextContent(): Promise<{ items: unknown[] }> }).getTextContent();
+      const text = (tc.items as unknown as { str?: string }[]).map((r) => r.str || "").join(" ");
+      tags.push(((text.match(/\b\d{4,}\s*-\s*[A-Za-z][A-Za-z ]*?(?=\s+MOB\b|\s*$)/) || [""])[0]).trim().toUpperCase());
+    }
+    return tags;
+  } catch {
+    return [];
+  }
+}
+
 // Pulls the printed dimension strings (column widths) out of the PDF's own
 // text layer, exactly and repeatably, so the AI never has to read tiny
 // numbers off a picture. Returns [] for scans/images with no text layer, in
@@ -1532,6 +1551,15 @@ export default function QuoteBuilder({
     return out;
   }
 
+  // One "Stone benchtop / Splashback / Appliances — by others" line for the whole job, however
+  // many room reads each produced their own.
+  function collapseByOthers(items: PlanItemResult[]): PlanItemResult[] {
+    const isOthers = (it: PlanItemResult) => /stone.*by others|by others.*stone/i.test(it.name);
+    const first = items.findIndex(isOthers);
+    if (first < 0) return items;
+    return items.filter((it, i) => !isOthers(it) || i === first);
+  }
+
   function addStandardDelivery(items: PlanItemResult[]): PlanItemResult[] {
     if (items.length === 0 || items.some((it) => /^delivery\b/i.test(it.name))) return items;
     const rooms = new Map<string, PlanItemResult[]>();
@@ -2389,8 +2417,30 @@ export default function QuoteBuilder({
       }
       const chunks: number[][] = [];
       if (pageTotal > PAGES_PER_READ) {
-        for (let i = 0; i < pageTotal; i += PAGES_PER_READ) {
-          chunks.push(Array.from({ length: Math.min(PAGES_PER_READ, pageTotal - i) }, (_, k) => i + k));
+        // Keep every sheet of one room (same title-block tag, e.g. "101189 - LAUNDRY") in the same
+        // chunk, so a room is never split across two reads and listed twice under different names.
+        const tags = isPdfFile ? await extractJobRoomTags(planFile) : [];
+        if (tags.length === pageTotal && tags.filter(Boolean).length >= pageTotal * 0.7) {
+          const groups: number[][] = [];
+          tags.forEach((t, i) => {
+            const last = groups[groups.length - 1];
+            if (last && (t === "" || tags[last[last.length - 1]] === t)) last.push(i);
+            else groups.push([i]);
+          });
+          let cur: number[] = [];
+          for (const g of groups) {
+            if (cur.length > 0 && cur.length + g.length > PAGES_PER_READ + 1) {
+              chunks.push(cur);
+              cur = [];
+            }
+            cur.push(...g);
+            while (cur.length > PAGES_PER_READ + 1) chunks.push(cur.splice(0, PAGES_PER_READ));
+          }
+          if (cur.length) chunks.push(cur);
+        } else {
+          for (let i = 0; i < pageTotal; i += PAGES_PER_READ) {
+            chunks.push(Array.from({ length: Math.min(PAGES_PER_READ, pageTotal - i) }, (_, k) => i + k));
+          }
         }
       } else {
         chunks.push([]);
@@ -2530,7 +2580,7 @@ export default function QuoteBuilder({
         tr("after drawer labels", merged);
         const inv = applyColumnInventory(merged, data.walls);
         tr("after column inventory", inv.items);
-        data.items = addStandardDelivery(addRobeHangingRails(dedupeIntegratedAppliances(fixVanityWallCabinets(groupKitchenRooms(anchorRegions(flagMatchingBandLengths(inv.items), inv.report))))));
+        data.items = collapseByOthers(addStandardDelivery(addRobeHangingRails(dedupeIntegratedAppliances(fixVanityWallCabinets(groupKitchenRooms(anchorRegions(flagMatchingBandLengths(inv.items), inv.report)))))));
         const noBoxBefore = data.items.filter((i: PlanItemResult) => !i.regions || i.regions.length === 0).length;
         data.items = fillMissingRegions(data.items, pageRoom);
         trace.push(`plan boxes: ${noBoxBefore} of ${data.items.length} items had no box from the read (now pointed at their room's sheet)`);
