@@ -176,3 +176,56 @@ export async function resetTerms(): Promise<Result> {
   revalidatePath("/dashboard/settings/terms");
   return { ok: true };
 }
+
+export type BusinessPayload = {
+  name: string;
+  contact: string;
+  abn: string;
+  address: string;
+  logo_data: string | null;
+  logo_ratio: number | null;
+  deposit_pct: number | null;
+  bank_account_name: string;
+  bank_name: string;
+  bank_bsb: string;
+  bank_account_no: string;
+  default_markup_pct: number | null;
+  default_valid_days: number | null;
+  markSetupComplete?: boolean;
+};
+
+// Saves the shop's business details (name/contact on the organisation, everything else in org_settings).
+export async function saveBusiness(b: BusinessPayload): Promise<Result> {
+  const ctx = await orgContext();
+  if (!ctx) return { error: "Not signed in." };
+  const name = b.name.trim();
+  if (!name) return { error: "Enter your business name." };
+  if (b.logo_data && b.logo_data.length > 1_500_000) return { error: "That logo is too large — try a smaller image." };
+  const pct = (v: number | null, max: number) => (v === null || !Number.isFinite(v) ? null : Math.min(max, Math.max(0, v)));
+  const org = await ctx.supabase.from("organizations").update({ name, business_contact: b.contact.trim() }).eq("id", ctx.orgId);
+  if (org.error) return { error: org.error.message };
+  const row: Record<string, unknown> = {
+    org_id: ctx.orgId,
+    abn: b.abn.trim(),
+    address: b.address.trim(),
+    logo_data: b.logo_data,
+    logo_ratio: b.logo_ratio,
+    deposit_pct: pct(b.deposit_pct, 100),
+    bank_account_name: b.bank_account_name.trim(),
+    bank_name: b.bank_name.trim(),
+    bank_bsb: b.bank_bsb.trim(),
+    bank_account_no: b.bank_account_no.trim(),
+    default_markup_pct: pct(b.default_markup_pct, 500),
+    default_valid_days: b.default_valid_days === null ? null : Math.max(1, Math.round(b.default_valid_days)),
+    updated_at: new Date().toISOString(),
+  };
+  if (b.markSetupComplete) row.setup_completed_at = new Date().toISOString();
+  const { error } = await ctx.supabase.from("org_settings").upsert(row, { onConflict: "org_id" });
+  if (error) {
+    if (/org_settings/.test(error.message)) return { error: "The business settings table hasn't been set up yet — run supabase/org_settings.sql first." };
+    return { error: error.message };
+  }
+  revalidatePath("/dashboard/settings/business");
+  revalidatePath("/dashboard");
+  return { ok: true };
+}

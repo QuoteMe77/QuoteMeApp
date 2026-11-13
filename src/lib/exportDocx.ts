@@ -148,8 +148,18 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
                 ...(isVicello(quote.businessName)
                   ? [new Paragraph({ children: [new ImageRun({ type: "png", data: b64(VICELLO_LOGO_PNG), transformation: { width: Math.round(46 * VICELLO_LOGO_RATIO), height: 46 } })] })]
                   : [
-                      new Paragraph({ children: [run((quote.businessName || "Business Name").toUpperCase(), { bold: true, size: 32, font: "Times New Roman", spacing: 60 })] }),
-                      new Paragraph({ children: [run(quote.businessContact || "", { size: 16, color: SOFT })] }),
+                      quote.logo
+                        ? new Paragraph({
+                            children: [
+                              new ImageRun({
+                                type: /^data:image\/jpe?g/i.test(quote.logo.dataUrl) ? "jpg" : "png",
+                                data: b64(quote.logo.dataUrl.replace(/^data:image\/\w+;base64,/, "")),
+                                transformation: { width: Math.round(46 * quote.logo.ratio), height: 46 },
+                              }),
+                            ],
+                          })
+                        : new Paragraph({ children: [run((quote.businessName || "Business Name").toUpperCase(), { bold: true, size: 32, font: "Times New Roman", spacing: 60 })] }),
+                      new Paragraph({ children: [run([quote.businessContact, quote.abn ? `ABN ${quote.abn}` : ""].filter(Boolean).join("  ·  "), { size: 16, color: SOFT })] }),
                     ]),
               ],
               W / 2
@@ -282,6 +292,29 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
       children: [run("All prices are excluding GST unless stated. Items marked POA (price on application) are excluded from the totals and priced separately.", { italics: true, size: 15, color: SOFT })],
     })
   );
+
+  if (!quote.variation && quote.depositPct && quote.depositPct > 0) {
+    kids.push(
+      new Paragraph({
+        spacing: { before: 120 },
+        children: [run(`Deposit on acceptance (${quote.depositPct}%): $${money(((subtotal + gst) * quote.depositPct) / 100)} inc GST`, { bold: true, size: 19 })],
+      })
+    );
+  }
+  if (quote.bank && (quote.bank.bsb || quote.bank.accountNo)) {
+    const bk = quote.bank;
+    kids.push(
+      new Paragraph({ spacing: { before: 120 }, children: [run("Payment details", { bold: true, size: 17 })] }),
+      new Paragraph({
+        children: [
+          run([bk.accountName ? `Account name: ${bk.accountName}` : "", bk.bankName || "", bk.bsb ? `BSB: ${bk.bsb}` : "", bk.accountNo ? `Account: ${bk.accountNo}` : ""].filter(Boolean).join("   ·   "), {
+            size: 17,
+            color: SOFT,
+          }),
+        ],
+      })
+    );
+  }
 
   // Scope of works
   kids.push(new Paragraph({ pageBreakBefore: true, children: [] }));

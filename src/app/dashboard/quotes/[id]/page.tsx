@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { loadPriceBook } from "@/lib/loadPriceBook";
 import QuoteBuilder from "@/components/QuoteBuilder";
 import { loadTerms } from "@/lib/loadTerms";
+import { loadOrgSettings } from "@/lib/orgSettings";
 
 export default async function EditQuotePage({ params }: { params: { id: string } }) {
   const supabase = createClient();
@@ -28,12 +29,14 @@ export default async function EditQuotePage({ params }: { params: { id: string }
     .order("sort_order", { ascending: true });
 
   const priceBook = await loadPriceBook(supabase);
+  const settings = await loadOrgSettings(supabase, profile.org_id);
   const { terms } = await loadTerms(supabase, profile.org_id, quote.business_name || "");
 
   return (
     <QuoteBuilder
       priceBook={priceBook || []}
       terms={terms}
+      settings={settings}
       quote={quote}
       items={items || []}
       defaultBusinessName={quote.business_name || ""}

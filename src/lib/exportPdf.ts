@@ -32,6 +32,11 @@ export type ExportQuote = {
   variation?: { no: number; originalRef: string; payNote: string };
   // The shop's own terms; falls back to the standard wording when not supplied.
   terms?: QuoteTerms;
+  // Shop branding and payment details (from Settings → Business setup).
+  logo?: { dataUrl: string; ratio: number };
+  abn?: string;
+  depositPct?: number | null;
+  bank?: { accountName?: string; bankName?: string; bsb?: string; accountNo?: string };
 };
 
 export const VARIATION_APPROVAL_TEXT = "I approve this variation and agree to the amount above.";
@@ -126,6 +131,10 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   if (vic) {
     const lh = 38;
     doc.addImage("data:image/png;base64," + VICELLO_LOGO_PNG, "PNG", mx, y - 22, lh * VICELLO_LOGO_RATIO, lh);
+  } else if (quote.logo) {
+    const lh = 38;
+    const fmt = /^data:image\/jpe?g/i.test(quote.logo.dataUrl) ? "JPEG" : "PNG";
+    doc.addImage(quote.logo.dataUrl, fmt, mx, y - 22, lh * quote.logo.ratio, lh);
   } else {
     setFont("times", "bold", 17, ink);
     const name = (quote.businessName || "Business Name").toUpperCase();
@@ -142,7 +151,10 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   spacedText(quote.variation ? "VARIATION" : "QUOTATION", W - mx, y + 2, 4.5, "right");
   setFont("helvetica", "normal", 8.5, soft);
   doc.text([quote.clientName, quote.quoteRef ? `Ref ${quote.quoteRef}` : "", quote.variation ? `Variation ${quote.variation.no}` : ""].filter(Boolean).join(" · "), W - mx, y + 17, { align: "right" });
-  if (!vic && quote.businessContact) doc.text(quote.businessContact, mx, y + 17, { maxWidth: cw * 0.6 });
+  if (!vic && (quote.businessContact || quote.abn)) {
+    const sub = [quote.businessContact, quote.abn ? `ABN ${quote.abn}` : ""].filter(Boolean).join("  ·  ");
+    doc.text(sub, mx, quote.logo ? y + 28 : y + 17, { maxWidth: cw * 0.6 });
+  }
   y += 62;
 
   // ---- Details grid ----
@@ -237,6 +249,27 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
     y
   );
   y += 16;
+  if (!quote.variation && quote.depositPct && quote.depositPct > 0) {
+    need(20);
+    setFont("helvetica", "bold", 9.5, ink);
+    doc.text(`Deposit on acceptance (${quote.depositPct}%): $${money(((subtotal + gst) * quote.depositPct) / 100)} inc GST`, mx, y);
+    y += 15;
+  }
+  const bk = quote.bank;
+  if (bk && (bk.bsb || bk.accountNo)) {
+    need(44);
+    setFont("helvetica", "bold", 8.5, ink);
+    doc.text("Payment details", mx, y);
+    setFont("helvetica", "normal", 8.5, soft);
+    y += 12;
+    doc.text(
+      [bk.accountName ? `Account name: ${bk.accountName}` : "", bk.bankName || "", bk.bsb ? `BSB: ${bk.bsb}` : "", bk.accountNo ? `Account: ${bk.accountNo}` : ""].filter(Boolean).join("   ·   "),
+      mx,
+      y,
+      { maxWidth: cw }
+    );
+    y += 16;
+  }
   if (quote.variation) {
     const vt = doc.splitTextToSize(
       `This is a variation to Quote ${quote.variation.originalRef || "(original quote)"}. ${quote.variation.payNote} Credits are shown as negative amounts.`,

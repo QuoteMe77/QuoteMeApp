@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { saveQuote, deleteQuoteAndRedirect, type QuoteItemInput, type QuoteMetaInput } from "@/app/dashboard/quotes/actions";
 import Logo from "@/components/Logo";
 import type { QuoteTerms } from "@/lib/quoteTerms";
+import type { OrgSettings } from "@/lib/orgSettings";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { buildQuotePdf } from "@/lib/exportPdf";
 import CostBreakdown from "@/components/CostBreakdown";
@@ -672,6 +673,7 @@ function newKey() {
 export default function QuoteBuilder({
   priceBook,
   terms,
+  settings,
   quote,
   items,
   defaultBusinessName,
@@ -680,6 +682,7 @@ export default function QuoteBuilder({
 }: {
   priceBook: PriceBookItem[];
   terms?: QuoteTerms;
+  settings?: OrgSettings;
   quote: QuoteRow;
   items: QuoteItemRow[];
   defaultBusinessName: string;
@@ -706,8 +709,8 @@ export default function QuoteBuilder({
   const [quoteDate, setQuoteDate] = useState(
     quote?.quote_date || new Date().toISOString().slice(0, 10)
   );
-  const [validDays, setValidDays] = useState(quote?.valid_days ?? 30);
-  const [markupPct, setMarkupPct] = useState(quote?.markup_pct ?? 32);
+  const [validDays, setValidDays] = useState(quote?.valid_days ?? settings?.default_valid_days ?? 30);
+  const [markupPct, setMarkupPct] = useState(quote?.markup_pct ?? settings?.default_markup_pct ?? 32);
   const [notes, setNotes] = useState(quote?.notes || "");
 
   const [lineItems, setLineItems] = useState<LineItem[]>(() =>
@@ -3282,6 +3285,12 @@ export default function QuoteBuilder({
           }
         : undefined,
       terms,
+      logo: settings?.logo_data && settings?.logo_ratio ? { dataUrl: settings.logo_data, ratio: settings.logo_ratio } : undefined,
+      abn: settings?.abn || undefined,
+      depositPct: settings?.deposit_pct ?? null,
+      bank: settings && (settings.bank_bsb || settings.bank_account_no)
+        ? { accountName: settings.bank_account_name, bankName: settings.bank_name, bsb: settings.bank_bsb, accountNo: settings.bank_account_no }
+        : undefined,
       businessName,
       businessContact,
       builderName,

@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function SettingsIndex() {
-  redirect("/dashboard/settings/price-book");
+  redirect("/dashboard/settings/business");
 }
