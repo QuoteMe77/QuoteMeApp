@@ -786,6 +786,7 @@ export default function QuoteBuilder({
 
   const [planUploading, setPlanUploading] = useState(false);
   const [planProgress, setPlanProgress] = useState("");
+  const [reviewedKeys, setReviewedKeys] = useState<Set<string>>(new Set());
   const [expandedPlanItems, setExpandedPlanItems] = useState<Set<number>>(new Set());
   const [removedPlanItems, setRemovedPlanItems] = useState<Set<number>>(new Set());
   // Which room's "add from price book" box is open in the plan review, and its search text.
@@ -4507,6 +4508,19 @@ export default function QuoteBuilder({
         <h3 className="font-display text-sm font-semibold mb-3 text-ink-soft uppercase tracking-wide">
           Line items
         </h3>
+        {lineItems.length > 1 && (
+          <div className="flex flex-wrap items-center gap-3 mb-3 text-xs text-ink-soft">
+            <span className="font-medium text-ink">
+              {lineItems.filter((l) => reviewedKeys.has(l.key)).length} of {lineItems.length} checked
+            </span>
+            <div className="h-1.5 w-32 bg-line rounded-full overflow-hidden">
+              <div className="h-full bg-brass" style={{ width: `${(lineItems.filter((l) => reviewedKeys.has(l.key)).length / lineItems.length) * 100}%` }} />
+            </div>
+            <span>Tick each line once you have checked it and it folds away.</span>
+            <button type="button" className="underline" onClick={() => setReviewedKeys(new Set(lineItems.map((l) => l.key)))}>Fold all</button>
+            <button type="button" className="underline" onClick={() => setReviewedKeys(new Set())}>Open all</button>
+          </div>
+        )}
         {lineItems.length === 0 ? (
           <p className="text-sm text-ink-soft">No items yet — search the price book above to add some.</p>
         ) : (
@@ -4534,6 +4548,15 @@ export default function QuoteBuilder({
                   markupPct={Number(markupPct) || 0}
                   onChange={(patch) => updateItem(it.key, patch)}
                   onRemove={() => removeItem(it.key)}
+                  reviewed={reviewedKeys.has(it.key)}
+                  onReview={(v) =>
+                    setReviewedKeys((prev) => {
+                      const n = new Set(prev);
+                      if (v) n.add(it.key);
+                      else n.delete(it.key);
+                      return n;
+                    })
+                  }
                   onViewPlan={it.plan_id && it.regions && it.regions.length > 0 ? () => void viewLineOnPlan(it) : undefined}
                 />
               ))}
@@ -5105,6 +5128,8 @@ function LineItemRow({
   onChange,
   onRemove,
   onViewPlan,
+  reviewed,
+  onReview,
 }: {
   index: number;
   item: LineItem;
@@ -5112,11 +5137,30 @@ function LineItemRow({
   onChange: (patch: Partial<LineItem>) => void;
   onRemove: () => void;
   onViewPlan?: () => void;
+  reviewed: boolean;
+  onReview: (v: boolean) => void;
 }) {
   const [sellDraft, setSellDraft] = useState<string | null>(null);
   const sellRate = item.rate * (1 + markupPct / 100);
   const lineTotal = item.poa ? null : item.qty * sellRate;
   const showCategory = item.category && item.category !== "Custom" && item.category !== "From plan";
+
+  if (reviewed) {
+    return (
+      <div className="flex items-center gap-3 py-2 px-1 text-sm">
+        <input type="checkbox" checked onChange={() => onReview(false)} className="accent-[#9a7b3f] h-4 w-4 shrink-0" title="Checked — untick to reopen" />
+        <span className="text-xs text-ink-soft w-5 shrink-0">{index}</span>
+        <span className="truncate flex-1 min-w-0">
+          {item.name} <span className="text-ink-soft">· {item.area}</span>
+        </span>
+        <span className="font-mono text-xs text-ink-soft whitespace-nowrap">
+          {item.qty} {item.unit}
+        </span>
+        <span className="font-mono text-xs font-semibold w-24 text-right whitespace-nowrap">{lineTotal === null ? "POA" : `$${money(lineTotal)}`}</span>
+        <button type="button" onClick={() => onReview(false)} className="text-xs text-brass underline underline-offset-2">Edit</button>
+      </div>
+    );
+  }
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-[2rem_1fr_6rem_7rem_7rem_7rem_2rem] gap-2 sm:gap-3 items-start py-3 px-1">
@@ -5157,6 +5201,10 @@ function LineItemRow({
             value={item.note}
             onChange={(v) => onChange({ note: v })}
           />
+        </label>
+        <label className="mt-2 inline-flex items-center gap-2 text-xs font-medium cursor-pointer select-none">
+          <input type="checkbox" checked={false} onChange={() => onReview(true)} className="accent-[#9a7b3f] h-4 w-4" />
+          Checked — fold this line away
         </label>
       </div>
 
