@@ -138,14 +138,14 @@ export default function SignupPage() {
         .input {
           width: 100%;
           padding: 8px 10px;
-          border: 1px solid #b8c4d3;
+          border: 1px solid #b9ac94;
           border-radius: 4px;
-          background: #ffffff;
+          background: #faf9f5;
           font-size: 13.5px;
           margin-bottom: 14px;
         }
         .input:focus {
-          outline: 2px solid #1a7fc4;
+          outline: 2px solid #2f6fb0;
           outline-offset: 1px;
         }
       `}</style>
