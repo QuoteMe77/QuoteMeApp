@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { loadPriceBook } from "@/lib/loadPriceBook";
 import QuoteBuilder from "@/components/QuoteBuilder";
+import { loadTerms } from "@/lib/loadTerms";
 
 export default async function NewQuotePage() {
   const supabase = createClient();
@@ -24,10 +25,12 @@ export default async function NewQuotePage() {
     .single();
 
   const priceBook = await loadPriceBook(supabase);
+  const { terms } = await loadTerms(supabase, profile.org_id, org?.name || "");
 
   return (
     <QuoteBuilder
       priceBook={priceBook || []}
+      terms={terms}
       quote={null}
       items={[]}
       defaultBusinessName={org?.name || ""}

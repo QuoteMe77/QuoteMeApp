@@ -131,3 +131,48 @@ export async function bulkAdjustRates(pct: number, section?: string): Promise<Re
   revalidatePath("/dashboard/settings/price-book");
   return { ok: true, changed };
 }
+
+export type TermsPayload = {
+  inclusions: string[];
+  sections: { title: string; groups: { heading?: string; items: string[] }[] }[];
+  approvalText: string;
+};
+
+// Saves the shop's terms & conditions. Blank lines, empty headings and empty sections are dropped.
+export async function saveTerms(t: TermsPayload): Promise<Result> {
+  const ctx = await orgContext();
+  if (!ctx) return { error: "Not signed in." };
+  const clean = (a: string[]) => a.map((x) => x.trim()).filter(Boolean);
+  const sections = t.sections
+    .map((s) => ({
+      title: s.title.trim(),
+      groups: s.groups
+        .map((g) => ({ ...(g.heading && g.heading.trim() ? { heading: g.heading.trim() } : {}), items: clean(g.items) }))
+        .filter((g) => g.items.length > 0),
+    }))
+    .filter((s) => s.title && s.groups.length > 0);
+  const row = {
+    org_id: ctx.orgId,
+    inclusions: clean(t.inclusions),
+    sections,
+    approval_text: t.approvalText.trim() || "I accept this quotation and the terms above.",
+    updated_at: new Date().toISOString(),
+  };
+  const { error } = await ctx.supabase.from("org_terms").upsert(row, { onConflict: "org_id" });
+  if (error) {
+    if (/org_terms/.test(error.message)) return { error: "The terms table hasn't been set up yet — run supabase/org_terms.sql first." };
+    return { error: error.message };
+  }
+  revalidatePath("/dashboard/settings/terms");
+  return { ok: true };
+}
+
+// Throws away the shop's edits so it goes back to the standard wording.
+export async function resetTerms(): Promise<Result> {
+  const ctx = await orgContext();
+  if (!ctx) return { error: "Not signed in." };
+  const { error } = await ctx.supabase.from("org_terms").delete().eq("org_id", ctx.orgId);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/settings/terms");
+  return { ok: true };
+}

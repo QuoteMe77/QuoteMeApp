@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } 
 import { useRouter } from "next/navigation";
 import { saveQuote, deleteQuoteAndRedirect, type QuoteItemInput, type QuoteMetaInput } from "@/app/dashboard/quotes/actions";
 import Logo from "@/components/Logo";
+import type { QuoteTerms } from "@/lib/quoteTerms";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { buildQuotePdf } from "@/lib/exportPdf";
 import CostBreakdown from "@/components/CostBreakdown";
@@ -670,6 +671,7 @@ function newKey() {
 
 export default function QuoteBuilder({
   priceBook,
+  terms,
   quote,
   items,
   defaultBusinessName,
@@ -677,6 +679,7 @@ export default function QuoteBuilder({
   defaultBuilderName,
 }: {
   priceBook: PriceBookItem[];
+  terms?: QuoteTerms;
   quote: QuoteRow;
   items: QuoteItemRow[];
   defaultBusinessName: string;
@@ -3278,6 +3281,7 @@ export default function QuoteBuilder({
             payNote: "This variation is payable with the next progress claim.",
           }
         : undefined,
+      terms,
       businessName,
       businessContact,
       builderName,

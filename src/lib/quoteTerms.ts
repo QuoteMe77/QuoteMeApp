@@ -155,3 +155,21 @@ export function quoteAreaGroups<T extends { area: string; poa: boolean }>(items:
     return { area, included: rows.filter((r) => !r.poa), poa: rows.filter((r) => r.poa) };
   });
 }
+
+export type QuoteTerms = { inclusions: string[]; sections: TermsSection[]; approvalText: string };
+
+// The standard wording, with the shop's own name in place of the template's. A shop that hasn't
+// edited its terms yet gets this, so its quotes never carry another company's name.
+export function defaultTermsFor(businessName?: string): QuoteTerms {
+  const name = (businessName || "").trim();
+  const swap = (t: string) =>
+    name ? t.replace(/VICELLO/g, name.toUpperCase()).replace(/Vicello/g, name) : t;
+  return {
+    inclusions: STANDARD_INCLUSIONS.map(swap),
+    sections: TERMS_SECTIONS.map((sec) => ({
+      title: swap(sec.title),
+      groups: sec.groups.map((g) => ({ heading: g.heading ? swap(g.heading) : g.heading, items: g.items.map(swap) })),
+    })),
+    approvalText: APPROVAL_TEXT,
+  };
+}

@@ -3,7 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const TABS = [{ href: "/dashboard/settings/price-book", label: "Price book & costs" }];
+const TABS = [
+  { href: "/dashboard/settings/price-book", label: "Price book & costs" },
+  { href: "/dashboard/settings/terms", label: "Terms & conditions" },
+];
 
 export default function SettingsTabs() {
   const path = usePathname();

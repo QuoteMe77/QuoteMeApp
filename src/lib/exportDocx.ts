@@ -288,7 +288,7 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
   kids.push(sectionHeading("Scope of Works"));
   if (!quote.variation) {
     kids.push(bandRow("00", "Standard Inclusions", "", false), new Paragraph({ spacing: { after: 80 }, children: [] }));
-    STANDARD_INCLUSIONS.forEach((s) => kids.push(bulletPara(s, 19)));
+    (quote.terms?.inclusions ?? STANDARD_INCLUSIONS).forEach((s) => kids.push(bulletPara(s, 19)));
   }
   if (quote.variation) {
     kids.push(
@@ -317,7 +317,7 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
   }
 
   // Terms & conditions on every quote
-  TERMS_SECTIONS.forEach((sec) => {
+  (quote.terms?.sections ?? TERMS_SECTIONS).forEach((sec) => {
     kids.push(sectionHeading(sec.title));
     sec.groups.forEach((g) => {
       if (g.heading) kids.push(new Paragraph({ keepNext: true, spacing: { before: 120, after: 60 }, children: [run(g.heading, { bold: true, size: 19 })] }));
@@ -327,7 +327,7 @@ export async function buildQuoteDocx(quote: ExportQuote): Promise<Blob> {
 
   // Client approval
   kids.push(sectionHeading("Client Approval"));
-  kids.push(new Paragraph({ keepNext: true, spacing: { after: 240 }, children: [run(quote.variation ? VARIATION_APPROVAL_TEXT : APPROVAL_TEXT, { color: SOFT })] }));
+  kids.push(new Paragraph({ keepNext: true, spacing: { after: 240 }, children: [run(quote.variation ? VARIATION_APPROVAL_TEXT : quote.terms?.approvalText ?? APPROVAL_TEXT, { color: SOFT })] }));
   ["Client name", "Client signature", "Date"].forEach((l) =>
     kids.push(
       new Paragraph({

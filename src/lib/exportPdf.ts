@@ -1,6 +1,6 @@
 import jsPDF from "jspdf";
 import { VICELLO_FOOTER_LINES, VICELLO_LOGO_PNG, VICELLO_LOGO_RATIO, VICELLO_MARK_PNG, isVicello } from "./brandAssets";
-import { APPROVAL_TEXT, STANDARD_INCLUSIONS, TERMS_SECTIONS, parseTermLine, quoteAreaGroups } from "./quoteTerms";
+import { APPROVAL_TEXT, STANDARD_INCLUSIONS, TERMS_SECTIONS, parseTermLine, quoteAreaGroups, type QuoteTerms } from "./quoteTerms";
 
 export type ExportLineItem = {
   name: string;
@@ -30,6 +30,8 @@ export type ExportQuote = {
   total: number;
   // Set when this document is a variation to an existing quote.
   variation?: { no: number; originalRef: string; payNote: string };
+  // The shop's own terms; falls back to the standard wording when not supplied.
+  terms?: QuoteTerms;
 };
 
 export const VARIATION_APPROVAL_TEXT = "I approve this variation and agree to the amount above.";
@@ -276,7 +278,7 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   };
   if (!quote.variation) {
     areaBand("00", "Standard Inclusions", "", false);
-    bullets(STANDARD_INCLUSIONS);
+    bullets(quote.terms?.inclusions ?? STANDARD_INCLUSIONS);
     y += 10;
   }
   groups.forEach((g, i) => {
@@ -320,7 +322,7 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   }
 
   // ---- Terms & conditions (every quote) ----
-  TERMS_SECTIONS.forEach((sec) => {
+  (quote.terms?.sections ?? TERMS_SECTIONS).forEach((sec) => {
     sectionHeading(sec.title);
     sec.groups.forEach((g) => {
       if (g.heading) {
@@ -338,7 +340,7 @@ export function buildQuotePdf(quote: ExportQuote): jsPDF {
   sectionHeading("Client Approval");
   need(150);
   setFont("helvetica", "normal", 9.5, soft);
-  doc.text(quote.variation ? VARIATION_APPROVAL_TEXT : APPROVAL_TEXT, mx, y);
+  doc.text(quote.variation ? VARIATION_APPROVAL_TEXT : quote.terms?.approvalText ?? APPROVAL_TEXT, mx, y);
   y += 34;
   ["Client name", "Client signature", "Date"].forEach((l) => {
     setFont("helvetica", "bold", 7.5, soft);
