@@ -311,6 +311,18 @@ async function extractPageTitles(file: File): Promise<Map<number, string>> {
           .trim();
       }
       if (!text) {
+        // Vicello shop drawings print the room beside the scale: "Scale: 1:25   RUMPUS   Signature:".
+        const sc = items.find((r) => /^Scale:/i.test(r.s));
+        if (sc) {
+          text = items
+            .filter((r) => Math.abs(r.y - sc.y) < 8 && r.x > sc.x + 40 && !/^(Signature|Date|Scale)/i.test(r.s) && r.x < viewport.width * 0.85)
+            .sort((a, b) => a.x - b.x)
+            .map((r) => r.s)
+            .join(" ")
+            .trim();
+        }
+      }
+      if (!text) {
         // Fallback: the sheet's title is the largest lettering in the bottom-right title block.
         const block = items.filter((r) => r.x > viewport.width * 0.78 && r.y > viewport.height * 0.85 && r.size > 0);
         const top = block.reduce((m, r) => Math.max(m, r.size), 0);
