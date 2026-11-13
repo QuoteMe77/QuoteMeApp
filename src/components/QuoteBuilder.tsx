@@ -3532,11 +3532,19 @@ export default function QuoteBuilder({
       )}
 
       {/* Job details */}
-      <section className="bg-paper-raised border border-line-strong rounded-lg p-5 mb-5">
-        <h3 className="font-display text-sm font-semibold mb-3 text-ink-soft uppercase tracking-wide">
-          Job details
-        </h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+      <details className="bg-paper-raised border border-line-strong rounded-lg p-5 mb-5 group">
+        <summary className="cursor-pointer list-none flex flex-wrap items-center gap-x-4 gap-y-1">
+          <h3 className="font-display text-sm font-semibold text-ink-soft uppercase tracking-wide">
+            Job details <span className="normal-case tracking-normal font-normal text-brass-deep ml-1">(click to edit)</span>
+          </h3>
+          <span className="text-sm text-ink-soft">
+            {[clientName, jobAddress, `Markup ${markupPct}%`].filter(Boolean).join(" · ") || "Filled in automatically when plans are read"}
+          </span>
+        </summary>
+        <p className="text-xs text-ink-soft mt-3">
+          These are filled in from the plans when you read them, so you only need to open this for manual entry or to change the markup.
+        </p>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
           <Field label="Client name">
             <input className="input" value={clientName} onChange={(e) => setClientName(e.target.value)} />
           </Field>
@@ -3569,7 +3577,7 @@ export default function QuoteBuilder({
             <input className="input" value={builderName} onChange={(e) => setBuilderName(e.target.value)} />
           </Field>
         </div>
-      </section>
+      </details>
 
       {/* Read a plan */}
       <section className="bg-paper-raised border border-line-strong rounded-lg p-5 mb-5">

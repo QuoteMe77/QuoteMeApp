@@ -77,6 +77,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <Link href="/dashboard" className="text-sm font-medium text-brass-deep hover:underline">
           My quotes
         </Link>
+        <Link href="/dashboard/settings" className="text-sm font-medium text-brass-deep hover:underline">
+          Settings
+        </Link>
         <span className="text-ink-soft text-sm flex-1">{org?.name}</span>
         {readsThisMonth !== null && (
           <span className="text-xs text-ink-soft" title="Plans read this month">
