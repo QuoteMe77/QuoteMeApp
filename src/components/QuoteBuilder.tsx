@@ -675,6 +675,7 @@ export default function QuoteBuilder({
   priceBook,
   terms,
   settings,
+  baseItems,
   quote,
   items,
   defaultBusinessName,
@@ -684,6 +685,8 @@ export default function QuoteBuilder({
   priceBook: PriceBookItem[];
   terms?: QuoteTerms;
   settings?: OrgSettings;
+  // For a variation: the lines of the original quote (plus earlier variations) that updated plans are compared against.
+  baseItems?: BaseLine[];
   quote: QuoteRow;
   items: QuoteItemRow[];
   defaultBusinessName: string;
@@ -694,6 +697,7 @@ export default function QuoteBuilder({
   const [isPending, startTransition] = useTransition();
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState(false);
+  const [diffNotice, setDiffNotice] = useState("");
   type ExportedCopy = { id: string; format: string; filename: string; storage_path: string; total: number; created_at: string };
   const [exportedCopies, setExportedCopies] = useState<ExportedCopy[]>([]);
   const [exportNotice, setExportNotice] = useState("");
@@ -3020,7 +3024,17 @@ export default function QuoteBuilder({
       .map((l, idx) => ({ l, idx }))
       .sort((a, b) => (areaOrder.get(a.l.area)! - areaOrder.get(b.l.area)!) || rankOf(a.l) - rankOf(b.l) || a.idx - b.idx)
       .map((x) => x.l);
-    setLineItems((prev) => [...prev, ...ordered]);
+    if (isVariation && baseItems && baseItems.length > 0) {
+      const d = diffAgainstBase(ordered, baseItems, newKey);
+      setLineItems((prev) => [...prev, ...d.lines]);
+      setDiffNotice(
+        d.lines.length === 0
+          ? `Compared with the original quote: no differences found (${d.same} items unchanged). Nothing was added.`
+          : `Compared with the original quote: ${d.added} added, ${d.changed} changed, ${d.removed} removed (credits), ${d.same} unchanged. Only the differences were added below — delete any line you don't agree with.`
+      );
+    } else {
+      setLineItems((prev) => [...prev, ...ordered]);
+    }
     setPlanResult(null);
     setPlanItemMaterial({});
     setPlanItemFlag({});
@@ -3530,6 +3544,30 @@ export default function QuoteBuilder({
           <p className="text-sm text-ink-soft mt-1">
             Fill in the client details, upload the plans and let QuoteMe read them — or add items by hand. You&apos;ll review everything before it goes out.
           </p>
+        </div>
+      )}
+
+      {isVariation && !isLocked && (
+        <div className="mb-5 rounded-lg border border-line-strong bg-paper-raised p-5">
+          <h3 className="font-display text-lg font-semibold mb-1">Building {docLabel}</h3>
+          <p className="text-sm text-ink-soft mb-3">Two ways to build a variation — use either or both:</p>
+          <div className="grid md:grid-cols-2 gap-3 text-sm">
+            <div className="rounded-md border border-line p-3 bg-white">
+              <div className="font-semibold mb-1">1. Enter items yourself</div>
+              <p className="text-ink-soft">
+                No plans needed — e.g. a subcontractor&apos;s price. Use <b>Add items manually</b> below: pick from the price book or add a <b>+ Custom item</b> with your cost. Markup is added on top. Use a negative quantity for a credit.
+              </p>
+            </div>
+            <div className="rounded-md border border-line p-3 bg-white">
+              <div className="font-semibold mb-1">2. Upload the updated plans</div>
+              <p className="text-ink-soft">
+                {baseItems && baseItems.length > 0
+                  ? "Use Read a plan. QuoteMe reads the new drawings and compares them with the original quote, adding only what's new, changed or removed (credits)."
+                  : "Use Read a plan. There's no original quote to compare with here, so everything read will be added in full."}
+              </p>
+            </div>
+          </div>
+          {diffNotice && <p className="mt-3 text-sm rounded-md bg-amber-50 border border-amber-200 text-amber-900 px-3 py-2">{diffNotice}</p>}
         </div>
       )}
 
@@ -4869,6 +4907,101 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </label>
   );
+}
+
+export type BaseLine = {
+  area: string | null;
+  name: string;
+  pdf_label: string | null;
+  qty: number;
+  unit: string | null;
+  rate: number;
+  calc: Calc;
+  category: string | null;
+  note: string | null;
+  price_book_item_id: string | null;
+  poa: boolean;
+};
+
+const normKey = (area: string | null | undefined, label: string, unit: string | null | undefined) =>
+  `${(area || "General").trim().toLowerCase()}|${label.trim().toLowerCase().replace(/\s+/g, " ")}|${(unit || "").trim().toLowerCase()}`;
+
+// Compares what the updated plans say against the original quote and returns only the DIFFERENCE as
+// variation lines: new items in full, changed items by the extra/reduced quantity (negative = credit)
+// and — only for rooms the updated plans cover — items that no longer appear as credits.
+function diffAgainstBase(newLines: LineItem[], base: BaseLine[], newKey: () => string) {
+  const sum = (arr: { key: string; qty: number }[]) => {
+    const m = new Map<string, number>();
+    arr.forEach((x) => m.set(x.key, (m.get(x.key) || 0) + x.qty));
+    return m;
+  };
+  const baseRows = base.map((b) => ({ b, key: normKey(b.area, b.pdf_label || b.name, b.unit) }));
+  const baseQty = sum(baseRows.map((r) => ({ key: r.key, qty: Number(r.b.qty) })));
+  const baseFirst = new Map<string, BaseLine>();
+  baseRows.forEach((r) => baseFirst.has(r.key) || baseFirst.set(r.key, r.b));
+
+  const newRows = newLines.map((l) => ({ l, key: normKey(l.area, l.pdf_label || l.name, l.unit) }));
+  const newQty = sum(newRows.map((r) => ({ key: r.key, qty: r.l.qty })));
+  const coveredAreas = new Set(newLines.map((l) => (l.area || "General").trim().toLowerCase()));
+
+  const out: LineItem[] = [];
+  let added = 0,
+    changed = 0,
+    removed = 0,
+    same = 0;
+  const done = new Set<string>();
+  newRows.forEach(({ l, key }) => {
+    if (done.has(key)) return;
+    done.add(key);
+    const nq = newQty.get(key) || 0;
+    const bq = baseQty.get(key);
+    const fmt = (n: number) => String(Math.round(n * 1000) / 1000);
+    if (bq === undefined) {
+      added++;
+      out.push({ ...l, key: newKey(), qty: nq, note: l.note ? `${l.note} — new in updated plans` : "New in updated plans" });
+      return;
+    }
+    const delta = Math.round((nq - bq) * 1000) / 1000;
+    if (Math.abs(delta) < 0.005) {
+      same++;
+      return;
+    }
+    changed++;
+    const b = baseFirst.get(key)!;
+    out.push({
+      ...l,
+      key: newKey(),
+      price_book_item_id: b.price_book_item_id ?? l.price_book_item_id,
+      rate: Number(b.rate) || l.rate,
+      unit: b.unit || l.unit,
+      qty: delta,
+      note: `${delta < 0 ? "Reduced" : "Increased"}: was ${fmt(bq)} → now ${fmt(nq)}`,
+    });
+  });
+  baseRows.forEach(({ b, key }) => {
+    if (done.has(key)) return;
+    if (!coveredAreas.has((b.area || "General").trim().toLowerCase())) return;
+    done.add(key);
+    const bq = baseQty.get(key) || 0;
+    if (Math.abs(bq) < 0.005) return;
+    removed++;
+    out.push({
+      key: newKey(),
+      price_book_item_id: b.price_book_item_id,
+      name: b.name,
+      category: b.category || "Credit",
+      calc: b.calc,
+      unit: b.unit || "",
+      rate: Number(b.rate),
+      qty: -bq,
+      area: b.area || "General",
+      note: "Removed in updated plans",
+      pdf_label: b.pdf_label || b.name,
+      poa: b.poa,
+      flag_label: "",
+    });
+  });
+  return { lines: out, added, changed, removed, same };
 }
 
 const ROOM_PRESETS = [
