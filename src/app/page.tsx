@@ -20,8 +20,8 @@ const FEATURES = [
 
 const STEPS = [
   { n: "1", title: "Upload the drawings", text: "PDFs from the builder, architect or designer." },
-  { n: "2", title: "Review what was found", text: "Check every item against the drawing, and adjust." },
-  { n: "3", title: "Send a detailed quote", text: "Professional PDF or Word, ready for your client." },
+  { n: "2", title: "Review the findings", text: "Check each item against the drawing and adjust where needed." },
+  { n: "3", title: "Send the PDF quote", text: "A detailed PDF or Word quote, ready for your client." },
 ];
 
 export default function HomePage() {
@@ -36,12 +36,12 @@ export default function HomePage() {
         />
 
         <div className="text-center mt-12">
-          <h1 className="text-3xl sm:text-5xl font-semibold text-ink mb-4 leading-tight">
+          <h1 className="font-display text-3xl sm:text-5xl font-medium text-ink mb-4 leading-tight tracking-tight">
             Detailed joinery quotes,
             <br className="hidden sm:block" /> completed in minutes
           </h1>
           <p className="text-lg text-ink-soft mb-9 max-w-2xl mx-auto">
-            Upload the drawings, check what QuoteMe found, and send a professional quote — with the cost of every part of the job worked out.
+            Upload the drawings, review the findings from the read, and send the PDF quote — with the cost of every part of the job worked out.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center mb-3">
             <Link
@@ -66,21 +66,21 @@ export default function HomePage() {
               <div className="w-11 h-11 rounded-lg flex items-center justify-center text-xl mb-4" style={{ background: "rgba(156,107,46,0.14)" }}>
                 {f.icon}
               </div>
-              <div className="text-lg font-semibold text-ink mb-1.5">{f.title}</div>
+              <div className="font-display text-xl font-medium text-ink mb-1.5">{f.title}</div>
               <p className="text-sm text-ink-soft leading-relaxed">{f.text}</p>
             </div>
           ))}
         </div>
 
         <div className="mt-16 rounded-2xl bg-paper-raised border border-line-strong p-8">
-          <h2 className="text-center text-xl font-semibold text-ink mb-8">How it works</h2>
+          <h2 className="font-display text-center text-2xl font-medium text-ink mb-8">How it works</h2>
           <div className="grid sm:grid-cols-3 gap-8">
             {STEPS.map((s) => (
               <div key={s.n} className="text-center">
                 <div className="mx-auto w-10 h-10 rounded-full bg-brass flex items-center justify-center font-semibold text-white mb-3">
                   {s.n}
                 </div>
-                <div className="font-semibold text-ink mb-1">{s.title}</div>
+                <div className="font-display text-lg font-medium text-ink mb-1">{s.title}</div>
                 <p className="text-sm text-ink-soft">{s.text}</p>
               </div>
             ))}
