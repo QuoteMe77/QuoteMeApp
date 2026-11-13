@@ -275,10 +275,16 @@ export function findDrawerView(words: TextWord[], pageNo: number, pageW: number,
     .map((t) => ({ ...t, m: /^[A-Z]\d{1,2}:\s*(.+)$/.exec(t.s) }))
     .filter((t) => t.m)
     .map((t) => ({ x: t.x, y: t.y, kind: /ELEVATION/.test(t.m![1]) ? "elev" : /SECTION/.test(t.m![1]) ? "section" : /PLAN/.test(t.m![1]) ? "plan" : "other" }));
+  // Vicello shop drawings title views plainly ("PLAN VIEW", "ELEVATION", "SECTION") and label each drawer
+  // front with its runner ("MERIVO K 400", "LEGRA M 500 INNER DRAWER").
+  flat.forEach((t) => {
+    const m = /^(PLAN VIEW|SIDE ELEVATION|ELEVATION(?: [A-Z0-9]+)?|SECTION)$/.exec(t.s);
+    if (m) titles.push({ x: t.x, y: t.y, kind: /SIDE|SECTION/.test(m[1]) ? "section" : /PLAN/.test(m[1]) ? "plan" : "elev" });
+  });
   const elevs = titles.filter((t) => t.kind === "elev");
   if (elevs.length === 0) return null;
   // "INNER DRAWER + JH19", "CUTLERY DRAWER + JH18" and plain "DRAWER" / "INNER DRAWER" labels all mark a drawer.
-  const tokens = flat.filter((t) => /^((INNER|CUTLERY) )?DRAWER( \+ JH\w+)?$/.test(t.s));
+  const tokens = flat.filter((t) => /^((INNER|CUTLERY) )?DRAWER( \+ JH\w+)?$/.test(t.s) || /^(MERIVO|LEGRA|LEGRABOX|MOVENTO|ANTARO|ANTARO) [A-Z] \d{3}( INNER DRAWER)?$/.test(t.s));
   // The plan view often states the total as bay labels ("2 x DRAWERS" in each of three bays).
   const planCount = flat.reduce((n, t) => {
     const m = /^(\d{1,2})\s*X\s*DRAWERS?$/.exec(t.s);
@@ -293,7 +299,7 @@ export function findDrawerView(words: TextWord[], pageNo: number, pageW: number,
       .reduce((m, t) => Math.min(m, t.x - 0.03 * pageW), pageW * 0.99);
     const inView = tokens.filter((t) => t.xc >= left && t.xc <= nextX && t.y <= e.y && t.y >= e.y - 0.45 * pageH);
     if (inView.length === 0) continue;
-    const inner = inView.filter((t) => /^INNER DRAWER/.test(t.s)).length;
+    const inner = inView.filter((t) => /^INNER DRAWER/.test(t.s) || /INNER DRAWER$/.test(t.s)).length;
     const plain = inView.length - inner;
     const count = Math.max(plain + inner, inner * 2, planCount);
     if (best && best.count >= count) continue;

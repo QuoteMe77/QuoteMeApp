@@ -76,8 +76,13 @@ export function findDimensionStrings(words: TextWord[], pageNo: number, pageW: n
       if (r) r.push(n);
       else rows.push([n]);
     }
+    // Staggered chains: small end figures (a 25 and a 30) are often printed a little above/below the
+    // main figures so they don't collide. Try each row again merged with everything within 22 units.
+    const merged = rows
+      .map((r) => rowCands.filter((n) => Math.abs(n.y - r[0].y) <= 22))
+      .filter((m, i, all) => m.length > rows[i].length && all.findIndex((o) => o.length === m.length && o[0] === m[0]) === i);
     // nearest row first (the dimension string closest above the overall)
-    for (const row of rows) {
+    for (const row of [...rows, ...merged]) {
       row.sort((a, b) => a.xc - b.xc);
       // Every contiguous run that sums to the overall; keep the one centred
       // under/over the overall figure (a stray figure from a neighbouring

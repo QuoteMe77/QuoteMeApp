@@ -338,6 +338,9 @@ function dropDuplicateViews(list0: DimensionString[]): DimensionString[] {
   type Tagged = DimensionString & { _tag?: string; _plan?: boolean };
   // a plan sheet's rows go when the same job-room has elevation sheets with figures of their own
   const list = list0.filter((d) => {
+    // A section/side view prints its depth as "455, 40, 5": one real width then two tiny clearances.
+    const w = d.columns.map((c) => c.width);
+    if (w.length === 3 && w[0] >= 300 && w[1] <= 60 && w[2] <= 60) return false;
     const t = d as Tagged;
     if (!t._plan || !t._tag) return true;
     return !list0.some((o) => !(o as Tagged)._plan && (o as Tagged)._tag === t._tag);
