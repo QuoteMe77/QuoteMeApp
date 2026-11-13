@@ -1627,6 +1627,23 @@ export default function QuoteBuilder({
     const warnings: string[] = [];
     if (!Array.isArray(walls) || walls.length === 0) return { items, report, warnings };
 
+    // The same wall is printed on several sheets (plan, elevation, 3D) and as frames/section depths.
+    // Count each real run once: drop section-depth strings, frame outlines that wrap another wall's
+    // overall, and repeats of an identical wall within a room.
+    const wKey = (w: { columns?: { width_mm: number }[] }) => (w.columns || []).map((c) => Number(c.width_mm) || 0);
+    const seenWall = new Set<string>();
+    const dedupedWalls = walls.filter((w) => {
+      const ws = wKey(w);
+      if (ws.length === 3 && ws[0] >= 300 && ws[1] <= 60 && ws[2] <= 60) return false;
+      const room = (w.room || "").trim().toLowerCase();
+      if (ws.length === 3 && ws[0] === ws[2] && ws[0] <= 300 &&
+        walls.some((o) => o !== w && (o.room || "").trim().toLowerCase() === room && Math.abs((Number(o.overall_mm) || 0) - ws[1]) <= 2)) return false;
+      const sig = `${room}|${Number(w.overall_mm) || 0}|${ws.join(",")}`;
+      if (seenWall.has(sig)) return false;
+      seenWall.add(sig);
+      return true;
+    });
+    walls = dedupedWalls;
     const lmItems = items.filter((it) => it.calc === "LM" && ["base", "wall", "tall"].includes(it.cabinet_type));
     const itemRooms = Array.from(new Set(lmItems.map((it) => it.room.trim().toLowerCase())));
 
