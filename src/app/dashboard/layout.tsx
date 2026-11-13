@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import SignOutButton from "./SignOutButton";
+import HelpAssistant from "@/components/HelpAssistant";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
@@ -110,6 +111,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       ) : (
         <main className="p-5">{children}</main>
       )}
+      {!blocked && <HelpAssistant />}
     </div>
   );
 }

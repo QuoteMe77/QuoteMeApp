@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } 
 import { useRouter } from "next/navigation";
 import { saveQuote, deleteQuoteAndRedirect, type QuoteItemInput, type QuoteMetaInput } from "@/app/dashboard/quotes/actions";
 import Logo from "@/components/Logo";
+import NoCopy from "@/components/NoCopy";
 import type { QuoteTerms } from "@/lib/quoteTerms";
 import type { OrgSettings } from "@/lib/orgSettings";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
@@ -4411,7 +4412,7 @@ export default function QuoteBuilder({
           </button>
         </div>
         {searchResults.length > 0 && (
-          <div className="border border-line rounded-md divide-y divide-line max-h-72 overflow-y-auto">
+          <NoCopy className="border border-line rounded-md divide-y divide-line max-h-72 overflow-y-auto">
             {searchResults.map((pb) => (
               <button
                 key={pb.id}
@@ -4427,7 +4428,7 @@ export default function QuoteBuilder({
                 </span>
               </button>
             ))}
-          </div>
+          </NoCopy>
         )}
       </section>
 

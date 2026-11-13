@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import NoCopy from "@/components/NoCopy";
 import { addPriceBookItem, bulkAdjustRates, deletePriceBookItem, updatePriceBookItem } from "../actions";
 
 type Item = {
@@ -97,7 +98,7 @@ export default function PriceBookEditor({ items }: { items: Item[] }) {
   }
 
   return (
-    <div>
+    <NoCopy>
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <input
           className="border border-line-strong rounded-md px-3 py-2 text-base bg-white w-72"
@@ -181,7 +182,7 @@ export default function PriceBookEditor({ items }: { items: Item[] }) {
           </div>
         </details>
       ))}
-    </div>
+    </NoCopy>
   );
 }
 

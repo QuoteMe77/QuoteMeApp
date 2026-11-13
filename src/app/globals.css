@@ -8,3 +8,9 @@ body {
   background: #EFEAE0;
   color: #241E17;
 }
+
+@media print {
+  .no-copy {
+    display: none !important;
+  }
+}
