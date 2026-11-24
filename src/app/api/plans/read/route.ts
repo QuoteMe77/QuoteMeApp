@@ -6,7 +6,7 @@ import { REFERENCE_EXAMPLES } from "./referenceExamples";
 // Newer models (Sonnet 5 and later) reject `thinking: { type: "enabled", budget_tokens }`
 // and want adaptive thinking steered by an effort level. Sonnet 4.x still uses the
 // budgeted form, so pick by model name and keep both working.
-const PLAN_MODEL = process.env.PLAN_READ_MODEL || "claude-sonnet-4-5";
+const PLAN_MODEL = process.env.PLAN_READ_MODEL || "claude-sonnet-5-5";
 const EFFORT_OVERRIDE = (["low", "medium", "high"] as const).find((e) => e === process.env.PLAN_READ_EFFORT);
 function thinkingFor(budgetTokens: number, effortIn: "low" | "medium" | "high" = "medium"): any {
   const effort = EFFORT_OVERRIDE || effortIn;
