@@ -292,7 +292,10 @@ export function findDrawerView(words: TextWord[], pageNo: number, pageW: number,
   }, 0);
   let best: DrawerView | null = null;
   for (const e of elevs) {
-    const left = e.x - 0.03 * pageW;
+    // A view's title sits under it, so the view reaches left of the title: bound it by the previous title on the row.
+    const left = titles
+      .filter((t) => t !== e && Math.abs(t.y - e.y) < 0.03 * pageH && t.x < e.x - 10)
+      .reduce((m, t) => Math.max(m, (t.x + e.x) / 2), 0);
     // next title on the same row bounds this view on the right
     const nextX = titles
       .filter((t) => t !== e && Math.abs(t.y - e.y) < 0.03 * pageH && t.x > e.x + 10)
