@@ -2653,7 +2653,8 @@ export default function QuoteBuilder({
       // rather than silently exporting a document split into sections that
       // may really be the one room under two different names.
       data.room_label_warning =
-        roomLabels.length > 1
+        // Four or more names is a genuine multi-room job (a whole house), not one room split by accident.
+        roomLabels.length > 1 && roomLabels.length < 4
           ? `This read used more than one room name (${roomLabels
               .map((r) => `"${r}"`)
               .join(
